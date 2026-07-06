@@ -100,6 +100,17 @@ const looksLikeKeyFile = (v: unknown): v is KeyFile => {
   if (typeof o.sourcePath !== 'string') {
     return false;
   }
+  // Optional chat token cap. Absent on pre-max_tokens vaults; when
+  // present it must be a positive integer or the envelope is treated
+  // as corrupt (nothing we write can produce another shape).
+  if (
+    o.maxTokens !== undefined &&
+    (typeof o.maxTokens !== 'number' ||
+      !Number.isInteger(o.maxTokens) ||
+      o.maxTokens < 1)
+  ) {
+    return false;
+  }
   return true;
 };
 

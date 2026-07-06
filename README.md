@@ -75,6 +75,8 @@ https://github.com/user-attachments/assets/ac096146-8aee-4304-af62-0f9a9776485b
    key=sk-proj-1345abCDef67890hijkLMNOpqrSTUvwxYZ012abc
    ```
 
+   Optional line: `max_tokens=1024` raises the reply-length cap (default 256 tokens, accepted range 16–8192). Longer replies cost proportionally more — check your provider's pricing page.
+
 4. **Tap the Copilot button** on the sidebar of any note, PDF, or EPUB. The popup opens; tap **Summary** to confirm everything works.
 
 That's it. There is no account to create, no service to register against, no companion app on your phone.

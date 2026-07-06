@@ -10,7 +10,13 @@
 // editor quirks (trailing whitespace, tabs, CRLF, blank lines,
 // comments).
 
-import {PROVIDER_IDS, type KeyFile, type ProviderId} from '../types';
+import {
+  CHAT_MAX_TOKENS_MAX,
+  CHAT_MAX_TOKENS_MIN,
+  PROVIDER_IDS,
+  type KeyFile,
+  type ProviderId,
+} from '../types';
 import {decodeUtf8} from '../sdk/utf8';
 import type {Logger} from '../sdk/types';
 
@@ -183,6 +189,23 @@ export const parseKeyFile = (
     }
   }
 
+  let maxTokens: number | undefined;
+  if (fields.max_tokens !== undefined) {
+    const n = Number(fields.max_tokens);
+    if (
+      Number.isInteger(n) &&
+      n >= CHAT_MAX_TOKENS_MIN &&
+      n <= CHAT_MAX_TOKENS_MAX
+    ) {
+      maxTokens = n;
+    } else {
+      logger.warn(
+        `${TAG} ${fileName}: invalid max_tokens="${fields.max_tokens}" ` +
+          `(integer ${CHAT_MAX_TOKENS_MIN}–${CHAT_MAX_TOKENS_MAX}) — using default`,
+      );
+    }
+  }
+
   let clarifyRedact: boolean | undefined;
   if (fields.clarify_redact !== undefined) {
     if (fields.clarify_redact === 'on' || fields.clarify_redact === 'true') {
@@ -206,7 +229,8 @@ export const parseKeyFile = (
       k !== 'key' &&
       k !== 'mode' &&
       k !== 'default_provider' &&
-      k !== 'clarify_redact'
+      k !== 'clarify_redact' &&
+      k !== 'max_tokens'
     ) {
       logger.log(`${TAG} ${fileName}: ignored unknown key "${k}"`);
     }
@@ -220,6 +244,7 @@ export const parseKeyFile = (
       key: fields.key,
       defaultProvider,
       clarifyRedact,
+      maxTokens,
       sourcePath: path,
     },
   };
