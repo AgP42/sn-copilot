@@ -59,6 +59,11 @@ jest.mock('sn-plugin-lib', () => ({
 
 const mockOpen = jest.fn();
 const mockGetScreenSize = jest.fn();
+const mockCleanupOldVersions = jest.fn(async () => ({
+  success: true,
+  freedBytes: 0,
+  kept: 'none',
+}));
 
 jest.mock('../src/native/CopilotOverlay', () => {
   const {
@@ -81,6 +86,8 @@ jest.mock('../src/native/CopilotOverlay', () => {
       writeFileBase64: jest.fn(async () => ({success: true, code: 'OK', message: ''})),
       cryptoPbkdf2Sha256: jest.fn(cryptoPbkdf2Sha256MockImpl),
       cryptoRandomBytes: jest.fn(cryptoRandomBytesMockImpl),
+      cleanupOldVersions: (...args: unknown[]) =>
+        mockCleanupOldVersions(...args),
     },
   };
 });
@@ -143,6 +150,7 @@ describe('index.js bootstrap', () => {
     mockCaptureCurrentPage.mockReset();
     mockCaptureCurrentPage.mockResolvedValue(null);
     mockSweepScratchOrphans.mockClear();
+    mockCleanupOldVersions.mockClear();
     mockSetPageContextPromise.mockClear();
     const {__testing__} = require('../src/pluginRouter');
     __testing__.reset();
@@ -181,6 +189,27 @@ describe('index.js bootstrap', () => {
       deleteFile?: unknown;
     };
     expect(typeof deps.deleteFile).toBe('function');
+  });
+
+  it('runs the old-version janitor at bootstrap with the plugin dir', async () => {
+    importBootstrap();
+    await drainMicrotasks();
+    expect(mockCleanupOldVersions).toHaveBeenCalledWith('/sd/copilot');
+  });
+
+  it('bootstrap survives a janitor failure', async () => {
+    mockCleanupOldVersions.mockRejectedValueOnce(new Error('sweep boom'));
+    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      importBootstrap();
+      await drainMicrotasks();
+      expect(mockInit).toHaveBeenCalledTimes(1);
+      expect(
+        log.mock.calls.some(c => c.join(' ').includes('janitor failed')),
+      ).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('registers App + SnCopilotPanel components and inits the plugin manager', () => {
