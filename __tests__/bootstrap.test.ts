@@ -12,6 +12,8 @@
  *      (1404x1872, the 7.8" portrait baseline).
  *   7. Failures from CopilotOverlay.open and captureCurrentPage are
  *      logged but do not crash the bootstrap.
+ *   8. The scratch-orphan sweep fires at bootstrap and the capture
+ *      deps carry a deleteFile bridge.
  */
 
 const registerButtonListenerCalls: Array<{
@@ -51,6 +53,7 @@ jest.mock('sn-plugin-lib', () => ({
   FileUtils: {
     exists: jest.fn(async () => false),
     listFiles: jest.fn(async () => null),
+    deleteFile: jest.fn(async () => true),
   },
 }));
 
@@ -83,8 +86,11 @@ jest.mock('../src/native/CopilotOverlay', () => {
 });
 
 const mockCaptureCurrentPage = jest.fn();
+const mockSweepScratchOrphans = jest.fn(async () => 0);
 jest.mock('../src/scope/captureScreenshot', () => ({
   captureCurrentPage: (...args: unknown[]) => mockCaptureCurrentPage(...args),
+  sweepScratchOrphans: (...args: unknown[]) =>
+    mockSweepScratchOrphans(...args),
 }));
 
 const mockSetPageContextPromise = jest.fn();
@@ -136,6 +142,7 @@ describe('index.js bootstrap', () => {
     });
     mockCaptureCurrentPage.mockReset();
     mockCaptureCurrentPage.mockResolvedValue(null);
+    mockSweepScratchOrphans.mockClear();
     mockSetPageContextPromise.mockClear();
     const {__testing__} = require('../src/pluginRouter');
     __testing__.reset();
@@ -151,6 +158,30 @@ describe('index.js bootstrap', () => {
   const importBootstrap = (): void => {
     require('../index.js');
   };
+
+  it('fires the scratch-orphan sweep at bootstrap with wired file bridges', async () => {
+    importBootstrap();
+    await drainMicrotasks();
+    expect(mockSweepScratchOrphans).toHaveBeenCalledTimes(1);
+    const deps = mockSweepScratchOrphans.mock.calls[0][0] as {
+      manager: unknown;
+      listFiles: unknown;
+      deleteFile: unknown;
+    };
+    expect(typeof deps.listFiles).toBe('function');
+    expect(typeof deps.deleteFile).toBe('function');
+    expect(deps.manager).toBeDefined();
+  });
+
+  it('passes a deleteFile bridge into the sidebar capture deps', async () => {
+    importBootstrap();
+    registerButtonListenerCalls[0].onButtonPress(okEvent(100)); // sidebar id
+    await drainMicrotasks();
+    const deps = mockCaptureCurrentPage.mock.calls[0][0] as {
+      deleteFile?: unknown;
+    };
+    expect(typeof deps.deleteFile).toBe('function');
+  });
 
   it('registers App + SnCopilotPanel components and inits the plugin manager', () => {
     importBootstrap();

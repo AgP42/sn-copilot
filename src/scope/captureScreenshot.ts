@@ -71,6 +71,11 @@ export type CaptureDeps = {
   fetchFn?: typeof fetch;
   logger?: Logger;
   docImageSize?: {width: number; height: number};
+  // Optional so tests and legacy call sites keep working. When
+  // provided (production wiring passes FileUtils.deleteFile), the
+  // scratch PNG is removed as soon as its bytes are in memory — the
+  // rendered page never persists on disk beyond the capture call.
+  deleteFile?: (path: string) => Promise<boolean>;
 };
 
 // Each capture writes to a unique scratch path so two captures kicked
@@ -81,6 +86,33 @@ const SCRATCH_PREFIX = 'copilot-page';
 let scratchCounter = 0;
 const nextScratchFilename = (): string =>
   `${SCRATCH_PREFIX}-${Date.now()}-${scratchCounter++}.png`;
+
+// Matches every filename nextScratchFilename can produce — used by the
+// startup sweep to recognise orphans left by crashes or by versions
+// that predate scratch deletion. Anchored and digit-strict so a
+// user file that merely contains "copilot-page" can never match.
+const SCRATCH_FILENAME_RE = /^copilot-page-\d+-\d+\.png$/;
+
+// Best-effort removal of a scratch PNG. Capture must never fail
+// because cleanup did — the bytes are already in memory when this
+// runs — so failures log and move on.
+const discardScratch = async (
+  deps: CaptureDeps,
+  pngPath: string,
+  logger: Logger,
+): Promise<void> => {
+  if (deps.deleteFile === undefined) {
+    return;
+  }
+  try {
+    const removed = await deps.deleteFile(pngPath);
+    if (!removed) {
+      logger.warn(`${TAG} scratch delete returned false: ${pngPath}`);
+    }
+  } catch (e) {
+    logger.warn(`${TAG} scratch delete threw: ${(e as Error).message}`);
+  }
+};
 
 // Both APIs return the SDK's APIResponse envelope: {success, result, error}.
 // Unwrap defensively — the field names and shapes are runtime-loose.
@@ -293,10 +325,16 @@ const captureNotePage = async (
     logger.warn(
       `${TAG} generateNotePng failed: ${JSON.stringify(renderResp)}`,
     );
+    // The render may have left a partial file behind — discard it.
+    await discardScratch(deps, pngPath, logger);
     return null;
   }
 
   const png = await readPngAsBase64(fetchFn, pngPath, logger);
+  // The PNG's job ends the moment its bytes are in memory. Deleting
+  // here (success or not) keeps page renders from accumulating on
+  // disk — they contain everything visible on the user's page.
+  await discardScratch(deps, pngPath, logger);
   if (png === null) {
     return null;
   }
@@ -352,10 +390,15 @@ const captureDocPage = async (
     logger.warn(
       `${TAG} generateDocImage failed: ${JSON.stringify(renderResp)}`,
     );
+    // The render may have left a partial file behind — discard it.
+    await discardScratch(deps, pngPath, logger);
     return null;
   }
 
   const png = await readPngAsBase64(fetchFn, pngPath, logger);
+  // Same policy as the note path: the rendered page never persists
+  // on disk beyond the capture call.
+  await discardScratch(deps, pngPath, logger);
   if (png === null) {
     return null;
   }
@@ -389,6 +432,65 @@ const captureDocPage = async (
     screenshotBase64: png.base64,
     pageText,
   };
+};
+
+// Startup sweep for scratch orphans. Captures interrupted by a crash
+// (or written by plugin versions that predate scratch deletion) leave
+// `copilot-page-<ts>-<n>.png` files behind; each one is a full render
+// of a page the user had open. Called fire-and-forget at bootstrap.
+//
+// Sweeps the same directory resolveScratchPath targets. Deletion is
+// filename-strict (SCRATCH_FILENAME_RE), so even on the shared
+// `/sdcard/Android/data` fallback only our own scratch files match.
+export type SweepDeps = {
+  manager: ManagerLike;
+  listFiles: (
+    path: string,
+  ) => Promise<Array<{path: string; type: number}> | null | undefined>;
+  deleteFile: (path: string) => Promise<boolean>;
+  logger?: Logger;
+};
+
+export const sweepScratchOrphans = async (deps: SweepDeps): Promise<number> => {
+  const noop = (): void => {};
+  const logger: Logger = deps.logger ?? {log: noop, warn: noop};
+  const scratchPath = await resolveScratchPath(deps.manager, logger);
+  if (scratchPath === null) {
+    return 0;
+  }
+  const dir = scratchPath.slice(0, scratchPath.lastIndexOf('/'));
+  let entries: Array<{path: string; type: number}> | null | undefined;
+  try {
+    entries = await deps.listFiles(dir);
+  } catch (e) {
+    logger.log(`${TAG} sweep: listFiles threw: ${(e as Error).message}`);
+    return 0;
+  }
+  if (!entries || entries.length === 0) {
+    return 0;
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    if (entry.type !== 1) {
+      continue;
+    }
+    const name = entry.path.slice(entry.path.lastIndexOf('/') + 1);
+    if (!SCRATCH_FILENAME_RE.test(name)) {
+      continue;
+    }
+    try {
+      if (await deps.deleteFile(entry.path)) {
+        removed++;
+      }
+    } catch (e) {
+      logger.warn(`${TAG} sweep: delete threw: ${(e as Error).message}`);
+    }
+  }
+  if (removed > 0) {
+    // Count only — never file names or paths (log hygiene).
+    infoLog(`${TAG} sweep removed ${removed} orphaned scratch file(s)`);
+  }
+  return removed;
 };
 
 export const captureCurrentPage = async (
