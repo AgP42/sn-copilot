@@ -265,7 +265,7 @@ export const writeVault = async (
   const salt = await randomBytes(SALT_LENGTH_BYTES);
   const key = await deriveKey(passphrase, salt, DEFAULT_KDF_PARAMS);
   const inner = encodeUtf8(JSON.stringify({files}));
-  const payload = encrypt(key, inner);
+  const payload = await encrypt(key, inner);
   const envelope: SerializedVault = {
     version: VAULT_VERSION,
     kdf: {

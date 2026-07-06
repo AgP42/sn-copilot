@@ -42,7 +42,7 @@ const seedEncryptedPayload = async (
   const io = createInMemoryFileIo();
   const salt = randomBytes(SALT_LENGTH_BYTES);
   const key = await deriveKey('123456', salt, DEFAULT_KDF_PARAMS);
-  const ct = encrypt(key, utf8.encode(payloadJson));
+  const ct = await encrypt(key, utf8.encode(payloadJson));
   io.fs.set(
     VAULT_PATH,
     utf8.encode(
