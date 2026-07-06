@@ -59,7 +59,7 @@ jest.mock('sn-plugin-lib', () => ({
 
 const mockOpen = jest.fn();
 const mockGetScreenSize = jest.fn();
-const mockCleanupOldVersions = jest.fn(async () => ({
+const mockCleanupOldVersions = jest.fn(async (..._args: unknown[]) => ({
   success: true,
   freedBytes: 0,
   kept: 'none',
@@ -93,7 +93,9 @@ jest.mock('../src/native/CopilotOverlay', () => {
 });
 
 const mockCaptureCurrentPage = jest.fn();
-const mockSweepScratchOrphans = jest.fn(async () => 0);
+const mockSweepScratchOrphans = jest.fn(
+  async (..._args: unknown[]) => 0,
+);
 jest.mock('../src/scope/captureScreenshot', () => ({
   captureCurrentPage: (...args: unknown[]) => mockCaptureCurrentPage(...args),
   sweepScratchOrphans: (...args: unknown[]) =>
