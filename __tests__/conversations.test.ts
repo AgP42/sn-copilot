@@ -737,7 +737,7 @@ describe('encrypted envelope shape validation', () => {
     // Write encrypted bytes whose plaintext is "garbage not json".
     const {encrypt} = require('../src/crypto/aesGcm');
     const key = fakeKey();
-    const ct = encrypt(key, utf8.encode('garbage not json'));
+    const ct = await encrypt(key, utf8.encode('garbage not json'));
     // Build an envelope with that ciphertext.
     const envelope = {
       version: CONVERSATION_SCHEMA_VERSION,

@@ -281,7 +281,7 @@ export const writeVault = async (
       iterations: DEFAULT_KDF_PARAMS.iterations,
       saltB64: bytesToBase64(salt),
     },
-    ctB64: bytesToBase64(encrypt(key, encodeUtf8(JSON.stringify({files})))),
+    ctB64: bytesToBase64(await encrypt(key, encodeUtf8(JSON.stringify({files})))),
   };
   await commitEnvelope(deps, envelope, key, files.length);
   return {key};
@@ -318,7 +318,7 @@ export const rewriteVault = async (
   // Safe cast: decryptVaultBytes just validated the envelope shape.
   const envelope = JSON.parse(decodeUtf8(bytes)) as SerializedVault;
   envelope.ctB64 = bytesToBase64(
-    encrypt(key, encodeUtf8(JSON.stringify({files}))),
+    await encrypt(key, encodeUtf8(JSON.stringify({files}))),
   );
   await commitEnvelope(deps, envelope, key, files.length);
 };
