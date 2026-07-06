@@ -53,11 +53,18 @@ export const createAnthropicClient = (
       });
     }
     content.push({type: 'text', text: req.userText});
+    // Prior turns first (normalised upstream: starts with 'user',
+    // alternating, non-empty — the shape this API enforces), then the
+    // current user message.
+    const history = (req.history ?? []).map(t => ({
+      role: t.role,
+      content: t.text,
+    }));
     const body = {
       model: opts.model,
       max_tokens: req.maxTokens,
       system: req.systemPrompt,
-      messages: [{role: 'user', content}],
+      messages: [...history, {role: 'user', content}],
     };
     const res = await fetchFn(ENDPOINT, {
       method: 'POST',

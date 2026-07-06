@@ -1,0 +1,104 @@
+/**
+ * Tests for src/ui/providerHistory — the pure normaliser that turns
+ * the on-screen ChatMessage list into the ProviderTurn[] replayed to
+ * providers.
+ *
+ * Pins:
+ *   1. Transient roles ('thinking') and empty/whitespace texts drop.
+ *   2. Cap to HISTORY_MESSAGE_LIMIT most recent messages.
+ *   3. Per-turn truncation at HISTORY_TURN_CHAR_LIMIT.
+ *   4. Leading assistant turns drop (Anthropic requires user-first).
+ *   5. Consecutive same-role turns merge (strict alternation).
+ *   6. Empty input → empty output (single-turn behaviour preserved).
+ */
+import {
+  buildProviderHistory,
+  HISTORY_MESSAGE_LIMIT,
+  HISTORY_TURN_CHAR_LIMIT,
+} from '../src/ui/providerHistory';
+
+const u = (text: string) => ({role: 'user', text});
+const a = (text: string) => ({role: 'assistant', text});
+
+describe('buildProviderHistory', () => {
+  it('returns an empty array for an empty message list', () => {
+    expect(buildProviderHistory([])).toEqual([]);
+  });
+
+  it('maps a clean user/assistant transcript 1:1', () => {
+    expect(
+      buildProviderHistory([u('Summarize'), a('• point one'), u('expand?')]),
+    ).toEqual([
+      {role: 'user', text: 'Summarize'},
+      {role: 'assistant', text: '• point one'},
+      {role: 'user', text: 'expand?'},
+    ]);
+  });
+
+  it("drops 'thinking' placeholders and empty/whitespace texts", () => {
+    expect(
+      buildProviderHistory([
+        u('Q1'),
+        {role: 'thinking'},
+        a('  \n '),
+        a('A1'),
+        {role: 'thinking', text: '…'},
+      ]),
+    ).toEqual([
+      {role: 'user', text: 'Q1'},
+      {role: 'assistant', text: 'A1'},
+    ]);
+  });
+
+  it('trims surrounding whitespace on kept turns', () => {
+    expect(buildProviderHistory([u('  hi  ')])).toEqual([
+      {role: 'user', text: 'hi'},
+    ]);
+  });
+
+  it(`keeps only the ${HISTORY_MESSAGE_LIMIT} most recent messages`, () => {
+    const msgs = [];
+    for (let i = 0; i < 20; i++) {
+      msgs.push(i % 2 === 0 ? u(`Q${i}`) : a(`A${i}`));
+    }
+    const out = buildProviderHistory(msgs);
+    expect(out).toHaveLength(HISTORY_MESSAGE_LIMIT);
+    // Window ends at the newest message…
+    expect(out[out.length - 1]).toEqual({role: 'assistant', text: 'A19'});
+    // …and opens on a user turn.
+    expect(out[0].role).toBe('user');
+  });
+
+  it('truncates an over-long turn, keeping its head', () => {
+    const long = 'x'.repeat(HISTORY_TURN_CHAR_LIMIT + 500);
+    const out = buildProviderHistory([u(long)]);
+    expect(out[0].text).toHaveLength(HISTORY_TURN_CHAR_LIMIT);
+    expect(out[0].text.endsWith('…')).toBe(true);
+  });
+
+  it('drops leading assistant turns so the sequence starts with user', () => {
+    expect(buildProviderHistory([a('orphan reply'), u('Q'), a('A')])).toEqual([
+      {role: 'user', text: 'Q'},
+      {role: 'assistant', text: 'A'},
+    ]);
+  });
+
+  it('returns empty when only assistant turns remain', () => {
+    expect(buildProviderHistory([a('reply one'), a('reply two')])).toEqual([]);
+  });
+
+  it('merges consecutive same-role turns (failed send left two user messages)', () => {
+    expect(
+      buildProviderHistory([u('first try'), u('second try'), a('reply')]),
+    ).toEqual([
+      {role: 'user', text: 'first try\n\nsecond try'},
+      {role: 'assistant', text: 'reply'},
+    ]);
+  });
+
+  it('handles messages with no text field (transient shapes)', () => {
+    expect(buildProviderHistory([{role: 'user'}, u('Q')])).toEqual([
+      {role: 'user', text: 'Q'},
+    ]);
+  });
+});
