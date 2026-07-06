@@ -319,7 +319,8 @@ describe('CopilotOverlay (janitor wrapper)', () => {
   });
 
   it('returns a structured failure when the host lacks the method', async () => {
-    const {cleanupOldVersions: _omit, ...withoutJanitor} = fakeNative;
+    const withoutJanitor = {...fakeNative} as Record<string, unknown>;
+    delete withoutJanitor.cleanupOldVersions;
     nativeModulesMock.CopilotOverlay =
       withoutJanitor as unknown as typeof fakeNative;
     const r = await CopilotOverlay.cleanupOldVersions('/data/plugin/dir');
