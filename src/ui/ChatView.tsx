@@ -45,6 +45,7 @@ import {tryAcquire, release} from '../reentrancy/inFlightGuard';
 import {getPageContext} from '../scope/pageContext';
 import {
   conversationPreview,
+  DEFAULT_CHAT_MAX_TOKENS,
   isImageCapableProvider,
   type Conversation,
   type ConversationMessage,
@@ -471,7 +472,9 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
           userText,
           imageBase64,
           history: wireTurns,
-          maxTokens: 256,
+          // Key-file override (max_tokens=) or the 256 default.
+          // Bounds were validated at parse time.
+          maxTokens: keyFile?.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
           signal: ctl.signal,
         },
         {apiKey, model},

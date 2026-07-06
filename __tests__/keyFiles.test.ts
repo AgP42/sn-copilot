@@ -378,6 +378,64 @@ describe('parseKeyFile — optional fields', () => {
     }
   });
 
+  it('parses a valid max_tokens override', () => {
+    const r = parseKeyFile(
+      'provider=anthropic\nmodel=x\nkey=y\nmax_tokens=1024\n',
+      path,
+      silentLogger,
+    );
+    expect(r.kind).toBe('ok');
+    if (r.kind === 'ok') {
+      expect(r.file.maxTokens).toBe(1024);
+    }
+    // Recognised key — must not hit the unknown-key log path.
+    expect(silentLogger.log).not.toHaveBeenCalledWith(
+      expect.stringContaining('unknown key "max_tokens"'),
+    );
+  });
+
+  it('accepts the bounds themselves (16 and 8192)', () => {
+    for (const v of ['16', '8192']) {
+      const r = parseKeyFile(
+        `provider=anthropic\nmodel=x\nkey=y\nmax_tokens=${v}\n`,
+        path,
+        silentLogger,
+      );
+      if (r.kind === 'ok') {
+        expect(r.file.maxTokens).toBe(Number(v));
+      }
+    }
+  });
+
+  it.each(['abc', '0', '-5', '15', '8193', '2.5', ''])(
+    'invalid max_tokens=%s is warned about and ignored',
+    val => {
+      const r = parseKeyFile(
+        `provider=anthropic\nmodel=x\nkey=y\nmax_tokens=${val}\n`,
+        path,
+        silentLogger,
+      );
+      expect(r.kind).toBe('ok');
+      if (r.kind === 'ok') {
+        expect(r.file.maxTokens).toBeUndefined();
+      }
+      expect(silentLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('invalid max_tokens'),
+      );
+    },
+  );
+
+  it('omitted max_tokens leaves the field undefined (default applies downstream)', () => {
+    const r = parseKeyFile(
+      'provider=anthropic\nmodel=x\nkey=y\n',
+      path,
+      silentLogger,
+    );
+    if (r.kind === 'ok') {
+      expect(r.file.maxTokens).toBeUndefined();
+    }
+  });
+
   it('invalid clarify_redact is logged and ignored', () => {
     const r = parseKeyFile(
       'provider=anthropic\nmodel=x\nkey=y\nclarify_redact=maybe\n',

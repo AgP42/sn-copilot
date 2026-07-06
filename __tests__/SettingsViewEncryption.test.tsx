@@ -491,7 +491,7 @@ describe('SettingsView — disable encryption with optional fields', () => {
     expect(new TextDecoder().decode(written!)).toContain('clarify_redact=off');
   });
 
-  it('preserves default_provider and clarify_redact in the written .txt', async () => {
+  it('preserves default_provider, clarify_redact and max_tokens in the written .txt', async () => {
     // Seed a .txt with the optional fields present.
     fs.set(
       TXT_PATH,
@@ -500,7 +500,8 @@ describe('SettingsView — disable encryption with optional fields', () => {
           'model=claude-haiku-4-5\n' +
           'key=sk-ant-x\n' +
           'default_provider=anthropic\n' +
-          'clarify_redact=on\n',
+          'clarify_redact=on\n' +
+          'max_tokens=1024\n',
       ),
     );
     const {tree} = renderSettings();
@@ -536,5 +537,6 @@ describe('SettingsView — disable encryption with optional fields', () => {
     const text = new TextDecoder().decode(written!);
     expect(text).toContain('default_provider=anthropic');
     expect(text).toContain('clarify_redact=on');
+    expect(text).toContain('max_tokens=1024');
   });
 });

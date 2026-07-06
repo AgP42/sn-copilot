@@ -338,6 +338,9 @@ function SettingsViewBody(props: {
         if (f.clarifyRedact !== undefined) {
           lines.push(`clarify_redact=${f.clarifyRedact ? 'on' : 'off'}`);
         }
+        if (f.maxTokens !== undefined) {
+          lines.push(`max_tokens=${f.maxTokens}`);
+        }
         const path = `/storage/emulated/0/MyStyle/SnCopilot/copilot-key-${f.provider}.txt`;
         await bundle.io.writeBytes(path, encodeUtf8(lines.join('\n') + '\n'));
       }
