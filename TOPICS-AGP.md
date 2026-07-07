@@ -246,3 +246,10 @@ Principe validé avec l'utilisateur le 2026-07-07 :
 
    Garde-fous : afficher une estimation de taille/coût avant envoi ;
    plafonds par provider ; DeepSeek = texte seul.
+
+### T22bis — Erreur 404 doit pointer vers le modèle (2026-07-07, test A5X)
+Incident : model=claude-Opus-4-8 (majuscule) dans le .txt → "anthropic:
+HTTP 404" cryptique, l'utilisateur a suspecté le build. Spec : dans
+sanitizeProviderError, cas 404 → message "HTTP 404 — model id probably
+wrong, check Settings" ; le dropdown T22 prévient le problème à la
+source.
