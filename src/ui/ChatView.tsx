@@ -42,7 +42,7 @@ import CopilotOverlay from '../native/CopilotOverlay';
 import {debugLog, infoLog} from '../diagnostics/log';
 import {redactPii} from '../privacy/redact';
 import {tryAcquire, release} from '../reentrancy/inFlightGuard';
-import {getPageContext} from '../scope/pageContext';
+import {getFreshPageContext} from '../scope/pageContext';
 import {
   conversationPreview,
   DEFAULT_CHAT_MAX_TOKENS,
@@ -435,7 +435,10 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
       // Awaiting here absorbs any residual capture latency under the
       // existing "thinking" placeholder. When we won't attach, skip
       // the await entirely.
-      const ctx = attachContext ? await getPageContext() : null;
+      // Freshness-checked: if the user flipped pages beneath the open
+      // panel since the sidebar tap, this re-captures the page now on
+      // screen (the "thinking" placeholder absorbs the wait).
+      const ctx = attachContext ? await getFreshPageContext() : null;
       // Vision capability is purely a property of the provider —
       // anthropic / openai / gemini get the page image, deepseek
       // doesn't. For text-only providers we silently scrub emails

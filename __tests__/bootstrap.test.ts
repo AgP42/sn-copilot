@@ -21,7 +21,15 @@ const registerButtonListenerCalls: Array<{
 }> = [];
 const mockInit = jest.fn();
 const mockRegisterButton = jest.fn();
-const mockGetPluginDirPath = jest.fn(async () => '/sd/copilot');
+const mockGetPluginDirPath = jest.fn(
+  async (): Promise<string | null> => '/sd/copilot',
+);
+const mockGetCurrentFilePath = jest.fn(
+  async (): Promise<unknown> => ({success: true, result: '/sd/notes/a.note'}),
+);
+const mockGetCurrentPageNum = jest.fn(
+  async (): Promise<unknown> => ({success: true, result: 4}),
+);
 
 type ButtonEventLike = {
   pressEvent: number;
@@ -47,7 +55,10 @@ jest.mock('sn-plugin-lib', () => ({
     ) => mockRegisterButton(type, scopes, opts),
     getPluginDirPath: () => mockGetPluginDirPath(),
   },
-  PluginCommAPI: {},
+  PluginCommAPI: {
+    getCurrentFilePath: () => mockGetCurrentFilePath(),
+    getCurrentPageNum: () => mockGetCurrentPageNum(),
+  },
   PluginFileAPI: {},
   PluginDocAPI: {},
   FileUtils: {
@@ -153,6 +164,10 @@ describe('index.js bootstrap', () => {
     mockCaptureCurrentPage.mockResolvedValue(null);
     mockSweepScratchOrphans.mockClear();
     mockCleanupOldVersions.mockClear();
+    mockGetCurrentFilePath.mockClear();
+    mockGetCurrentPageNum.mockClear();
+    const pageContext = jest.requireActual('../src/scope/pageContext');
+    pageContext.__testing__.reset();
     mockSetPageContextPromise.mockClear();
     const {__testing__} = require('../src/pluginRouter');
     __testing__.reset();
@@ -175,12 +190,14 @@ describe('index.js bootstrap', () => {
     expect(mockSweepScratchOrphans).toHaveBeenCalledTimes(1);
     const deps = mockSweepScratchOrphans.mock.calls[0][0] as {
       manager: unknown;
-      listFiles: unknown;
-      deleteFile: unknown;
+      listFiles: (p: string) => Promise<unknown>;
+      deleteFile: (p: string) => Promise<unknown>;
     };
-    expect(typeof deps.listFiles).toBe('function');
-    expect(typeof deps.deleteFile).toBe('function');
     expect(deps.manager).toBeDefined();
+    // Drive the bridge arrows so a broken FileUtils wiring is caught
+    // here rather than on-device.
+    await expect(deps.listFiles('/sd/dir')).resolves.toBeNull();
+    await expect(deps.deleteFile('/sd/f.png')).resolves.toBe(true);
   });
 
   it('passes a deleteFile bridge into the sidebar capture deps', async () => {
@@ -188,9 +205,9 @@ describe('index.js bootstrap', () => {
     registerButtonListenerCalls[0].onButtonPress(okEvent(100)); // sidebar id
     await drainMicrotasks();
     const deps = mockCaptureCurrentPage.mock.calls[0][0] as {
-      deleteFile?: unknown;
+      deleteFile?: (p: string) => Promise<unknown>;
     };
-    expect(typeof deps.deleteFile).toBe('function');
+    await expect(deps.deleteFile!('/sd/f.png')).resolves.toBe(true);
   });
 
   it('runs the old-version janitor at bootstrap with the plugin dir', async () => {
@@ -208,6 +225,87 @@ describe('index.js bootstrap', () => {
       expect(mockInit).toHaveBeenCalledTimes(1);
       expect(
         log.mock.calls.some(c => c.join(' ').includes('janitor failed')),
+      ).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('wires a freshness probe that reads the current file + page', async () => {
+    importBootstrap();
+    const pageContext = require('../src/scope/pageContext');
+    // Stored context matches the probed location → no recapture.
+    pageContext.setPageContext({
+      notePath: '/sd/notes/a.note',
+      page: 4,
+      screenshotPath: '/x.png',
+      screenshotBase64: 'AAAA',
+      pageText: '',
+    });
+    mockCaptureCurrentPage.mockClear();
+    const same = await pageContext.getFreshPageContext();
+    expect(same?.page).toBe(4);
+    expect(mockCaptureCurrentPage).not.toHaveBeenCalled();
+    // User flipped to page 9 → the wired refresher re-captures.
+    mockGetCurrentPageNum.mockResolvedValueOnce({success: true, result: 9});
+    const fresh = {notePath: '/sd/notes/a.note', page: 9};
+    mockCaptureCurrentPage.mockResolvedValueOnce(fresh);
+    const refreshed = await pageContext.getFreshPageContext();
+    expect(mockCaptureCurrentPage).toHaveBeenCalledTimes(1);
+    expect(refreshed).toBe(fresh);
+  });
+
+  it('probe yields null (no recapture) when the host returns junk', async () => {
+    importBootstrap();
+    const pageContext = require('../src/scope/pageContext');
+    const stored = {
+      notePath: '/sd/notes/a.note',
+      page: 4,
+      screenshotPath: '/x.png',
+      screenshotBase64: 'AAAA',
+      pageText: '',
+    };
+    pageContext.setPageContext(stored);
+    mockCaptureCurrentPage.mockClear();
+    mockGetCurrentFilePath.mockResolvedValueOnce({success: false});
+    expect(await pageContext.getFreshPageContext()).toBe(stored);
+    expect(mockCaptureCurrentPage).not.toHaveBeenCalled();
+  });
+
+  it('logs the janitor summary when bytes were freed', async () => {
+    mockCleanupOldVersions.mockResolvedValueOnce({
+      success: true,
+      freedBytes: 2048,
+      kept: '1748000000000',
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      importBootstrap();
+      await drainMicrotasks();
+      expect(
+        warn.mock.calls.some(c => c.join(' ').includes('janitor freed 2 KiB')),
+      ).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('skips the janitor when the plugin dir is unavailable', async () => {
+    mockGetPluginDirPath.mockResolvedValueOnce(null);
+    importBootstrap();
+    await drainMicrotasks();
+    expect(mockCleanupOldVersions).not.toHaveBeenCalled();
+  });
+
+  it('bootstrap survives a scratch-sweep failure', async () => {
+    mockSweepScratchOrphans.mockRejectedValueOnce(new Error('sweep boom'));
+    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      importBootstrap();
+      await drainMicrotasks();
+      expect(mockInit).toHaveBeenCalledTimes(1);
+      expect(
+        log.mock.calls.some(c => c.join(' ').includes('scratch sweep failed')),
       ).toBe(true);
     } finally {
       log.mockRestore();

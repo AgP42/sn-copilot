@@ -21,7 +21,11 @@ import {
   captureCurrentPage,
   sweepScratchOrphans,
 } from './src/scope/captureScreenshot';
-import {setPageContextPromise} from './src/scope/pageContext';
+import {
+  setPageContextProbe,
+  setPageContextPromise,
+  setPageContextRefresher,
+} from './src/scope/pageContext';
 import {buildWiringBundle} from './src/storage/wiring';
 import {installSecureLifecycle} from './src/storage/lifecycleWiring';
 
@@ -136,6 +140,31 @@ sweepScratchOrphans({
   console.log('[COPILOT] scratch sweep failed:', String(e));
 });
 
+// Freshness wiring for the chat send path: a cheap "which file+page
+// is on screen" probe and a full recapture callback. getFreshPageContext
+// uses them to detect that the user flipped pages beneath the open
+// panel and re-shoots the capture instead of answering about a page
+// they left.
+const captureDeps = () => ({
+  comm: PluginCommAPI,
+  file: PluginFileAPI,
+  doc: PluginDocAPI,
+  manager: PluginManager,
+  logger: {log: msg => debugLog(msg), warn: msg => console.warn(msg)},
+  deleteFile: path => FileUtils.deleteFile(path),
+});
+setPageContextProbe(async () => {
+  const fp = await PluginCommAPI.getCurrentFilePath();
+  const pn = await PluginCommAPI.getCurrentPageNum();
+  const path = fp && typeof fp === 'object' ? fp.result : null;
+  const page = pn && typeof pn === 'object' ? pn.result : null;
+  if (typeof path !== 'string' || typeof page !== 'number') {
+    return null;
+  }
+  return {path, page};
+});
+setPageContextRefresher(() => captureCurrentPage(captureDeps()));
+
 // Route the sidebar button click into the native overlay.
 // Subscribing here (rather than installing a second listener) keeps
 // the single-listener contract in src/pluginRouter.ts.
@@ -156,18 +185,7 @@ subscribeToButtonEvents(async event => {
   // logger.log lines from captureCurrentPage carry the notePath and
   // byte counts, so route them through debugLog (no-op in release).
   // logger.warn stays on console.warn — those are actionable signals.
-  const consoleLogger = {
-    log: msg => debugLog(msg),
-    warn: msg => console.warn(msg),
-  };
-  const capturePromise = captureCurrentPage({
-    comm: PluginCommAPI,
-    file: PluginFileAPI,
-    doc: PluginDocAPI,
-    manager: PluginManager,
-    logger: consoleLogger,
-    deleteFile: path => FileUtils.deleteFile(path),
-  }).catch(e => {
+  const capturePromise = captureCurrentPage(captureDeps()).catch(e => {
     console.log('[COPILOT] captureCurrentPage threw', String(e));
     return null;
   });

@@ -48,12 +48,14 @@ import {
   resetVault,
 } from '../storage/secureFlows';
 import {getActiveKeys} from '../storage/sessionKey';
+import {serializeKeyFile} from '../storage/keyFiles';
 import {encodeUtf8} from '../sdk/utf8';
-import type {
-  CustomAction,
-  KeyFile,
-  ProviderId,
-  ProviderResolution,
+import {
+  DEFAULT_CHAT_MAX_TOKENS,
+  type CustomAction,
+  type KeyFile,
+  type ProviderId,
+  type ProviderResolution,
 } from '../types';
 // (CustomAction stays imported for the read-only display below.)
 import CustomActionsSettings from './CustomActionsSettings';
@@ -329,22 +331,8 @@ function SettingsViewBody(props: {
     // Write-back: re-create one .txt per provider in MyStyle/SnCopilot/.
     const writeBack = async (files: KeyFile[]): Promise<void> => {
       for (const f of files) {
-        const lines = [
-          `provider=${f.provider}`,
-          `model=${f.model}`,
-          `key=${f.key}`,
-        ];
-        if (f.defaultProvider !== undefined) {
-          lines.push(`default_provider=${f.defaultProvider}`);
-        }
-        if (f.clarifyRedact !== undefined) {
-          lines.push(`clarify_redact=${f.clarifyRedact ? 'on' : 'off'}`);
-        }
-        if (f.maxTokens !== undefined) {
-          lines.push(`max_tokens=${f.maxTokens}`);
-        }
         const path = `/storage/emulated/0/MyStyle/SnCopilot/copilot-key-${f.provider}.txt`;
-        await bundle.io.writeBytes(path, encodeUtf8(lines.join('\n') + '\n'));
+        await bundle.io.writeBytes(path, encodeUtf8(serializeKeyFile(f)));
       }
     };
     await disableEncryption(
@@ -365,26 +353,54 @@ function SettingsViewBody(props: {
     await refresh();
   }, [bundle.prefsDeps, bundle.vaultDeps, refresh]);
 
-  // Encrypted-mode model edit. Only wired into KeyFileBlock when the
-  // vault is unlocked; plaintext mode keeps the .txt as the single
-  // source of truth (edit the file, tap Refresh).
+  // Model edit, both storage modes. Encrypted+unlocked → rewrite the
+  // vault with the cached derived key (changeModel flow). Plaintext /
+  // migrate → regenerate the .txt at its source path; comments in the
+  // user's file are not preserved (serializeKeyFile is the canonical
+  // form the parser reads back).
   const onChangeModel = useCallback(
     async (
       provider: ProviderId,
       newModel: string,
     ): Promise<{ok: true} | {ok: false; reason: string}> => {
-      const r = await changeModel(
-        {vault: bundle.vaultDeps, prefs: bundle.prefsDeps},
-        provider,
-        newModel,
-      );
-      if (!r.ok) {
-        return {ok: false, reason: r.reason};
+      const trimmed = newModel.trim();
+      if (trimmed.length === 0) {
+        return {ok: false, reason: 'model must not be empty'};
       }
-      await refresh();
-      return {ok: true};
+      if (state !== null && state.kind === 'unlocked') {
+        const r = await changeModel(
+          {vault: bundle.vaultDeps, prefs: bundle.prefsDeps},
+          provider,
+          trimmed,
+        );
+        if (!r.ok) {
+          return {ok: false, reason: r.reason};
+        }
+        await refresh();
+        return {ok: true};
+      }
+      if (
+        state !== null &&
+        (state.kind === 'plaintext' || state.kind === 'migrate')
+      ) {
+        const target = state.files.find(f => f.provider === provider);
+        if (target === undefined) {
+          return {ok: false, reason: `no key file for provider "${provider}"`};
+        }
+        try {
+          await bundle.io.writeBytes(
+            target.sourcePath,
+            encodeUtf8(serializeKeyFile({...target, model: trimmed})),
+          );
+        } catch (e) {
+          return {ok: false, reason: (e as Error).message};
+        }
+        await refresh();
+        return {ok: true};
+      }
+      return {ok: false, reason: 'no editable key store in this state'};
     },
-    [bundle.prefsDeps, bundle.vaultDeps, refresh],
+    [bundle.io, bundle.prefsDeps, bundle.vaultDeps, refresh, state],
   );
 
   const onIdleTimeoutChange = useCallback(
@@ -570,7 +586,10 @@ function SettingsViewBody(props: {
           <KeyFileBlock
             resolution={resolution}
             onChangeModel={
-              state !== null && state.kind === 'unlocked'
+              state !== null &&
+              (state.kind === 'unlocked' ||
+                state.kind === 'plaintext' ||
+                state.kind === 'migrate')
                 ? onChangeModel
                 : undefined
             }
@@ -827,6 +846,14 @@ function ActiveProviderBlock({
       ) : (
         <EditableModelRow active={active} onChangeModel={onChangeModel} />
       )}
+      <View style={styles.fieldRow}>
+        <Text style={styles.fieldLabel}>Reply cap</Text>
+        <Text testID="settings-active-maxtokens" style={styles.fieldValue}>
+          {active.maxTokens !== undefined
+            ? `${active.maxTokens} tokens (max_tokens=)`
+            : `${DEFAULT_CHAT_MAX_TOKENS} tokens (default)`}
+        </Text>
+      </View>
       <View style={styles.fieldRow}>
         <Text style={styles.fieldLabel}>API key</Text>
         <Text

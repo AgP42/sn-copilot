@@ -25,6 +25,7 @@ import {
   discoverKeyFiles,
   matchKeyFilename,
   parseKeyFile,
+  serializeKeyFile,
 } from '../src/storage/keyFiles';
 
 const silentLogger = {
@@ -584,5 +585,38 @@ describe('discoverKeyFiles', () => {
       fetchFn: jest.fn() as unknown as typeof fetch,
     });
     expect(r.files).toHaveLength(0);
+  });
+});
+
+describe('serializeKeyFile', () => {
+  it('round-trips through parseKeyFile with every optional field', () => {
+    const full = {
+      provider: 'anthropic' as const,
+      model: 'claude-opus-4-8',
+      key: 'sk-ant-x',
+      defaultProvider: 'anthropic' as const,
+      clarifyRedact: false,
+      maxTokens: 1024,
+      sourcePath: '/sd/MyStyle/SnCopilot/copilot-key-anthropic.txt',
+    };
+    const text = serializeKeyFile(full);
+    const r = parseKeyFile(text, full.sourcePath, silentLogger);
+    expect(r.kind).toBe('ok');
+    if (r.kind === 'ok') {
+      expect(r.file.model).toBe('claude-opus-4-8');
+      expect(r.file.defaultProvider).toBe('anthropic');
+      expect(r.file.clarifyRedact).toBe(false);
+      expect(r.file.maxTokens).toBe(1024);
+    }
+  });
+
+  it('omits absent optional fields', () => {
+    const text = serializeKeyFile({
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      key: 'sk-x',
+      sourcePath: '/x',
+    });
+    expect(text).toBe('provider=openai\nmodel=gpt-4o-mini\nkey=sk-x\n');
   });
 });

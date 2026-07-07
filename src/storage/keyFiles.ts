@@ -250,6 +250,28 @@ export const parseKeyFile = (
   };
 };
 
+// Canonical text form of a KeyFile — the exact shape parseKeyFile
+// reads back. Used by the disable-encryption write-back and by the
+// Settings model editor in plaintext mode. Comments in the user's
+// original file are not preserved (the file is regenerated).
+export const serializeKeyFile = (f: KeyFile): string => {
+  const lines = [
+    `provider=${f.provider}`,
+    `model=${f.model}`,
+    `key=${f.key}`,
+  ];
+  if (f.defaultProvider !== undefined) {
+    lines.push(`default_provider=${f.defaultProvider}`);
+  }
+  if (f.clarifyRedact !== undefined) {
+    lines.push(`clarify_redact=${f.clarifyRedact ? 'on' : 'off'}`);
+  }
+  if (f.maxTokens !== undefined) {
+    lines.push(`max_tokens=${f.maxTokens}`);
+  }
+  return lines.join('\n') + '\n';
+};
+
 // Find every copilot-key-*.txt under root, parse each, and return
 // the successful KeyFile entries plus any parse errors.
 //

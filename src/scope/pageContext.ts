@@ -33,6 +33,27 @@ export type PageContext = {
 
 let currentPromise: Promise<PageContext | null> | null = null;
 
+// Wired by index.js at bootstrap. `refresher` re-runs the full
+// capture; `prober` answers "which file+page is the user on right
+// now" with two cheap SDK calls. Both live here (not in ChatView)
+// so the UI stays free of sn-plugin-lib imports and tests register
+// fakes instead.
+let refresher: (() => Promise<PageContext | null>) | null = null;
+let prober: (() => Promise<{path: string; page: number} | null>) | null =
+  null;
+
+export const setPageContextRefresher = (
+  fn: () => Promise<PageContext | null>,
+): void => {
+  refresher = fn;
+};
+
+export const setPageContextProbe = (
+  fn: () => Promise<{path: string; page: number} | null>,
+): void => {
+  prober = fn;
+};
+
 // Used by index.js: stores the in-flight capture promise. The button
 // handler does NOT await this — it just hands the promise off so the
 // overlay can open immediately. Chat send awaits later.
@@ -56,10 +77,42 @@ export const getPageContext = async (): Promise<PageContext | null> => {
   return currentPromise ?? null;
 };
 
+// Freshness-checked getter for the chat send path. The capture is
+// taken ONCE at sidebar tap, but the panel only covers part of the
+// screen — the user can keep flipping pages beneath it. Answering
+// about a page the user left is worse than a 1-2s recapture, so:
+// probe the current file+page (two cheap SDK calls); when it differs
+// from the stored capture (or the stored capture is missing/failed),
+// re-run the capture and replace the stored promise. Falls back to
+// the stored value when the probe/refresher aren't wired (tests,
+// unexpected hosts).
+export const getFreshPageContext = async (): Promise<PageContext | null> => {
+  const ctx = await (currentPromise ?? Promise.resolve(null));
+  if (prober === null || refresher === null) {
+    return ctx;
+  }
+  let cur: {path: string; page: number} | null = null;
+  try {
+    cur = await prober();
+  } catch {
+    return ctx;
+  }
+  if (cur === null) {
+    return ctx;
+  }
+  if (ctx !== null && ctx.notePath === cur.path && ctx.page === cur.page) {
+    return ctx;
+  }
+  currentPromise = refresher().catch(() => null);
+  return currentPromise;
+};
+
 // Test-only — a fresh module under jest is the same singleton, and we
 // don't want test ordering to leak state.
 export const __testing__ = {
   reset(): void {
     currentPromise = null;
+    refresher = null;
+    prober = null;
   },
 };

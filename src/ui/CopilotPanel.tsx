@@ -42,6 +42,7 @@ import ChatView from './ChatView';
 import GrillView from './GrillView';
 import SettingsView from './SettingsView';
 import UnlockScreen from './UnlockScreen';
+import {appendDebugLine} from '../storage/debugLogFile';
 import {useProviderClient} from './useProviderClient';
 
 type View = 'chat' | 'settings' | 'drill';
@@ -223,9 +224,21 @@ function CopilotPanelInner(props: InnerProps): React.JSX.Element {
 
   const onUnlockAttempt = useCallback(
     async (secret: string) => {
+      // Field report (Nomad, no adb): unlock rejects the correct PIN
+      // on-device while the whole crypto suite passes under jest. The
+      // debug log gives the user a file to read over USB so we can
+      // see WHICH step disagrees. No secrets: lengths + kinds only.
+      const dbg = (line: string) =>
+        appendDebugLine(bundle.io, `[unlock] ${line}`);
+      const digitsOnly = /^\d+$/.test(secret);
       const r = await unlockFlow(
         {vault: bundle.vaultDeps, prefs: bundle.prefsDeps},
         secret,
+      );
+      dbg(
+        `attempt len=${secret.length} digitsOnly=${digitsOnly} ` +
+          `state=${state?.kind ?? 'null'} → ${r.kind}` +
+          (r.kind === 'corrupt' ? ` (${r.reason})` : ''),
       );
       if (r.kind === 'wrong-pin') {
         return {kind: 'wrong-pin' as const};
@@ -238,19 +251,32 @@ function CopilotPanelInner(props: InnerProps): React.JSX.Element {
       }
       // ok — but if state was 'merge' (plaintext present alongside the
       // vault), fold the new key files into the vault under the same
-      // PIN so we don't loop on the unlock screen.
+      // PIN so we don't loop on the unlock screen. The merge result
+      // MUST be checked: a silent failure here used to leave the
+      // state machine on 'merge' → UnlockScreen again → "my PIN
+      // doesn't work" with a PIN that was correct all along.
       if (state !== null && state.kind === 'merge') {
-        await mergeIntoVault(
+        const m = await mergeIntoVault(
           {vault: bundle.vaultDeps, prefs: bundle.prefsDeps},
           secret,
           r.files,
           state.plaintextFiles,
         );
+        dbg(
+          `merge files=${state.plaintextFiles.length} → ` +
+            (m.ok ? 'ok' : `FAILED (${m.reason})`),
+        );
+        if (!m.ok) {
+          return {
+            kind: 'corrupt' as const,
+            reason: `unlocked, but merging the plaintext key file failed: ${m.reason}`,
+          };
+        }
         await refresh();
       }
       return {kind: 'ok' as const};
     },
-    [bundle.prefsDeps, bundle.vaultDeps, refresh, state],
+    [bundle.io, bundle.prefsDeps, bundle.vaultDeps, refresh, state],
   );
 
   const onUnlockReset = useCallback(async () => {
@@ -305,7 +331,11 @@ function CopilotPanelInner(props: InnerProps): React.JSX.Element {
   // there's nothing actionable in settings until unlock.
   if (state !== null && (state.kind === 'locked' || state.kind === 'merge')) {
     return (
-      <UnlockScreen onAttempt={onUnlockAttempt} onReset={onUnlockReset} />
+      <UnlockScreen
+        onAttempt={onUnlockAttempt}
+        onReset={onUnlockReset}
+        onClose={closeOverlay}
+      />
     );
   }
 

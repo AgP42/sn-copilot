@@ -74,3 +74,30 @@ describe('shouldAttachPageContext', () => {
     expect(shouldAttachPageContext('freeform', 'tell me a joke')).toBe(false);
   });
 });
+
+describe('isPageReferential — French patterns', () => {
+  it.each([
+    'résume cette page',
+    'Résume ce document',
+    'explique ce schéma',
+    "c'est quoi cette image",
+    "qu'est-ce que c'est",
+    'traduis ce texte en anglais',
+    'décris ce dessin',
+    'que manque-t-il sur cette page',
+    'quels sont les points clés',
+    'clarifie mes notes',
+    'corrige ce paragraphe',
+    'analyse ce tableau',
+  ])('attaches for: %s', text => {
+    expect(shouldAttachPageContext('freeform', text)).toBe(true);
+  });
+
+  it.each([
+    'raconte-moi une blague',
+    'quelle est la capitale de la France',
+    'combien font 2 plus 2',
+  ])('does NOT attach for generic chat: %s', text => {
+    expect(shouldAttachPageContext('freeform', text)).toBe(false);
+  });
+});

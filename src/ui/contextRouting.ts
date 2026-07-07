@@ -36,6 +36,17 @@ const REFERENTIAL_PATTERNS: readonly RegExp[] = [
   /\b(what (is|are) missing|anything missing|unclear|ambiguous|inconsistent)\b/,
   // Question-about-author / source intents.
   /\b(who wrote|who is the author|what is the topic|main idea|key (points?|takeaways?))\b/,
+  // ---- French. The device sells across Europe and the default-
+  // attach philosophy shouldn't silently stop at the language
+  // barrier. Same tiers as the English list: demonstratives +
+  // content nouns, action verbs, spatial cues, "what is this"
+  // framings. Input is lowercased upstream; accented characters
+  // survive toLowerCase so the patterns match them literally.
+  /\b(cette|ce|cet|ma|mon|mes|la|le) (page|note|carnet|document|contenu|texte|écriture|image|dessin|schéma|figure|tableau|graphique|équation|formule|paragraphe|section|titre|liste|croquis)\b/,
+  /\b(résume[rz]?|reformule[rz]?|réécri[sre]|simplifie[rz]?|traduis|traduire|explique[rz]?|clarifie[rz]?|analyse[rz]?|corrige[rz]?|décri[sre]|extrai[sre])\b/,
+  /\b(ci[- ]dessus|ci[- ]dessous|sur (la |cette )?page|à l'écran)\b/,
+  /(qu'?est[- ]ce que (c'?est|ça|ceci|cette|ce)|c'?est quoi (ça|ceci|cette|ce))/,
+  /\b(points? clés?|idée principale|à retenir|que manque)\b/,
 ];
 
 export const isPageReferential = (rawText: string): boolean => {
