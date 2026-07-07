@@ -131,3 +131,118 @@ prend déjà {apiKey, model} par appel. Version future.
   nouveaux chemins (kdf/randomBytes fallbacks préexistants + poignée
   de branches index.js/captureScreenshot). À compléter au découpage
   en PRs propres.
+
+## Feedback tests batch 1.1 (Nomad, 2026-07-07 après-midi)
+
+### T18 — CONFIRMÉ par copilot-debug.log : la crypto est INNOCENTE
+Log récupéré via MTP :
+  12:35:21 [unlock] attempt len=8 digitsOnly=true state=merge → ok
+  12:35:22 [unlock] merge files=1 → ok   (idem à 12:38)
+Le PIN est bon, le déchiffrement réussit, le merge réussit. Le bug est
+la machine à états : après un merge réussi, le copilot-key-*.txt reste
+sur le disque → au refresh/réouverture, useCopilotState voit vault +
+plaintext → état 'merge' → écran Unlock à nouveau. Boucle infinie avec
+un PIN correct. Fix spec : après merge réussi, proposer la suppression
+du .txt (comme le flux encrypt initial), et/ou ne plus gater le chat
+quand le plaintext est identique au contenu du vault. Bug upstream.
+
+### T8/T9 — VALIDÉ sur device
+"Si je change de page (sans reload) puis ouvre une nouvelle
+conversation, c'est bien le new context qui est pris en compte."
+Screenshot smiley (16:50) : la question "c'est quoi ca ?" du test
+précédent ne matchait pas les patterns FR (« ca » sans cédille non
+couvert par c'?est quoi (ça|ceci|cette|ce)) → renforcer T9 : variantes
+sans accents (ca, ça), et/ou politique attach-par-défaut quand une
+conversation a déjà du contexte page.
+
+### T22 — Sélecteur de modèle : dropdown + champ libre
+Demande : liste déroulante de modèles valides par provider + champ
+libre pour les tout derniers modèles. Spec : liste curée embarquée
+(à maintenir) ou fetch de l'API /v1/models du provider (Anthropic
+l'expose ; OpenAI aussi ; à voir par provider). Champ libre conservé
+(le plugin ne doit pas allow-lister, philosophie upstream).
+
+### T23 — max_tokens éditable dans Settings
+Comme le modèle (T17) : édition directe dans l'UI, écrit dans le .txt
+(plaintext) ou le vault (encrypted). L'affichage read-only "Reply cap"
+du batch 1.1 devient un éditeur.
+
+## Décisions de spec (retour utilisateur, 2026-07-07 soir)
+
+### T9 — REDÉFINI : tuer la gate regex, pas la rafistoler
+Clarification : la regex n'est PAS la compréhension du LLM — c'est un
+pré-filtre de l'AUTEUR qui décide si le screenshot de page est JOINT à
+la requête (économie de tokens image + privacy : ne pas envoyer la
+page manuscrite quand on demande une blague). Le LLM comprend tout ;
+mais si la gate rate, il ne REÇOIT pas l'image → "je ne vois pas
+d'image". Verdict utilisateur : inacceptable de dépendre de la
+formulation. Cible spec :
+  - le contexte de page doit partir PAR DÉFAUT (philosophie déclarée
+    du module upstream, jamais vraiment appliquée),
+  - contrôle VISIBLE et explicite dans le panneau : indicateur
+    "page jointe : fichier p.N" + toggle on/off (fusion avec T20),
+  - la regex peut rester comme optimisation pour ne pas joindre sur
+    les cas manifestement génériques, mais ne doit plus jamais être
+    la condition d'attachement d'une conversation ancrée page.
+
+### T18 — REDÉFINI : la coexistence vault + .txt doit fonctionner
+Le plugin propose lui-même "Skip — I'll delete it manually" au moment
+du chiffrement → garder le .txt est un chemin SUPPORTÉ. Le fix ne
+peut donc pas être "supprimer le fichier". Cible spec : après
+unlock+merge réussi, si le contenu plaintext est déjà inclus dans le
+vault (même provider/clé/modèle), passer directement au chat
+déverrouillé — l'état 'merge' ne doit se déclencher que quand le .txt
+diffère réellement du vault. Suppression du .txt = simple suggestion.
+
+### T22 — VALIDÉ : liste curée de modèles
+Anthropic : claude-haiku-4-5, claude-sonnet-5, claude-sonnet-4-6,
+claude-opus-4-8, claude-opus-4-7, claude-opus-4-6 (tous vision).
+Éviter claude-fable-5 (cher + refus safety = réponses vides dans ce
+plugin). OpenAI : gpt-4o-mini, gpt-4o (+ champ libre pour gpt-5*/o*).
+Gemini/DeepSeek : à vérifier au moment du code. Dropdown + champ
+libre toujours présent (pas d'allow-list dure, philosophie upstream).
+
+## Spec clarifiée : le CONTEXTE (fusion T8/T9/T10/T14/T20 → "T-CTX")
+
+Principe validé avec l'utilisateur le 2026-07-07 :
+
+1. VIGNETTE SÉLECTIONNABLE. Le panneau affiche une miniature de la
+   capture de page courante. Le user CLIQUE pour la joindre au message ;
+   désélectionnée par défaut. Remplace la gate regex (supprimée comme
+   condition d'attachement). DÉCIDÉ (option A, 2026-07-07) : les quick
+   actions (Summary/Explain/Clarify/Snapshot + customs) joignent
+   TOUJOURS la capture automatiquement, sans regarder le toggle — le
+   toggle ne gouverne que les messages tapés en champ libre.
+
+2. MÉMOIRE D'IMAGES = HISTORIQUE REJOUÉ + PROMPT CACHING.
+   L'API est stateless ; "se souvenir" d'une image = la renvoyer dans
+   l'historique à chaque requête. Design cible :
+   - l'image jointe entre dans l'historique de conversation (comme les
+     tours texte du PR2) et est REJOUÉE aux tours suivants → le modèle
+     "voit" toujours le smiley au tour 2 sans re-capture ;
+   - activer cache_control (Anthropic) sur le préfixe de conversation →
+     l'historique rejoué (images comprises) coûte ~10% au lieu de 100%.
+     Le plugin n'utilise AUCUN caching aujourd'hui — gros gain upstream
+     indépendant du reste (PR candidate à part entière) ;
+   - cap raisonnable d'images en historique (ex. 3-5 dernières), au-delà
+     on droppe les plus anciennes ;
+   - min cacheable prefix Anthropic : 4096 tokens (haiku/opus) — une
+     image ~1600 tokens + system suffit en général.
+   - équivalents OpenAI (cache auto) / Gemini (implicit caching) : à
+     vérifier au code ; DeepSeek : cache auto.
+
+3. SÉLECTEUR DE CONTEXTE MULTI-FICHIERS. Le user peut joindre :
+   - d'autres pages du fichier courant (plage ou sélection),
+   - le FICHIER ENTIER : pour un PDF, l'envoyer NATIVEMENT (document
+     block base64 Anthropic, ≤32MB, ≤600 pages sur modèles 1M, ≤100 sur
+     Haiku 200K) — plus propre que N images ; pour un .note, N rendus
+     PNG (pas d'export PDF via SDK à vérifier) ;
+   - n'importe quel fichier du stockage : .txt/.json/.md inline en
+     texte ; .pdf en document ; images en image blocks. UI type
+     mini-explorateur de fichiers (le dashboard AgP a déjà un composant
+     browser réutilisable pour NOTRE fork).
+   Clarification : aujourd'hui, même sur un PDF, seule la page affichée
+   part — le modèle ne voit jamais le document entier.
+
+   Garde-fous : afficher une estimation de taille/coût avant envoi ;
+   plafonds par provider ; DeepSeek = texte seul.
