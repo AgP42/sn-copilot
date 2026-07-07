@@ -253,3 +253,25 @@ HTTP 404" cryptique, l'utilisateur a suspecté le build. Spec : dans
 sanitizeProviderError, cas 404 → message "HTTP 404 — model id probably
 wrong, check Settings" ; le dropdown T22 prévient le problème à la
 source.
+
+### T24 — A5X gen-1 : overlay tactile mort après clavier système (PIN setup)
+2026-07-07, test A5X gen-1 : écran "Create a PIN", PIN+Confirm saisis
+(donc clavier système a marché), puis AUCUN bouton ne répond (Continue
+affiche encore "Continue" pas "Working…" → le tap n'atteint pas le JS)
+et Cancel non plus → user piégé, doit désinstaller/redémarrer. Fond OK.
+- PinSetup.tsx NON modifié par le fork → bug upstream/firmware, pas nos
+  changements crypto (qui afficheraient "Working…").
+- Hypothèse : clavier système (IME) au-dessus de TYPE_APPLICATION_
+  OVERLAY sur firmware gen-1 → l'overlay perd le focus tactile à la
+  fermeture de l'IME. Le Manta (A5X2) ne semble pas affecté (encrypt
+  y a marché).
+- Pas d'adb sur gen-1 → dur à diagnostiquer à l'aveugle. Pistes :
+  FLAG_NOT_FOCUSABLE vs focusable sur la LayoutParams de l'overlay ;
+  ou éviter l'IME (saisie PIN via pavé custom dans l'overlay, comme le
+  dashboard fait ses propres contrôles). À creuser SI l'A5X gen-1 doit
+  être supporté — sinon documenter "PIN setup non fiable sur A5X gen-1,
+  utiliser un clavier BT ou éditer le vault ailleurs".
+- IMPACT UX transverse : un overlay qui piège l'utilisateur sans sortie
+  est inacceptable ; au minimum, un bouton de fermeture d'urgence
+  toujours réactif (mais si le tactile entier est mort, inutile...).
+  Vraie mitigation = ne pas dépendre de l'IME système.
