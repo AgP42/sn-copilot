@@ -219,19 +219,3 @@ describe('UnlockScreen — ok / wrong / corrupt', () => {
     expect(onAttempt).not.toHaveBeenCalled();
   });
 });
-
-describe('UnlockScreen — close without unlocking', () => {
-  it('renders a close button when onClose is provided, and taps through', () => {
-    const onClose = jest.fn();
-    const {tree} = render({onClose});
-    act(() => {
-      findByTestID(tree, 'unlock-close').props.onPress();
-    });
-    expect(onClose).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders no close button when onClose is absent', () => {
-    const {tree} = render();
-    expect(maybeFindByTestID(tree, 'unlock-close')).toBeNull();
-  });
-});

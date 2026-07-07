@@ -303,7 +303,7 @@ const encodeEncrypted = async (
   // the *in-memory* key for the actual encryption regardless — the
   // KDF block is informational + forward-compat.
   const inner = encodePlaintext(store);
-  const payload = await encrypt(key, inner);
+  const payload = encrypt(key, inner);
   const envelope: SerializedEncryptedEnvelope = {
     version: CONVERSATION_SCHEMA_VERSION,
     kdf: {

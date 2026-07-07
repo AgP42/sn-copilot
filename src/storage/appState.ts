@@ -16,16 +16,9 @@
 //                    Settings cog surfaces the migration prompt.)
 //   migrate       → vault doesn't exist, plaintext files exist, and
 //                    mode='undecided'. Show MigrationPrompt.
-//   merge         → vault exists AND plaintext files exist with
-//                    content NOT already covered by the vault
-//                    (rotation / new provider added). Show unlock
-//                    first; the merge happens in the unlock callback.
-//                    A plaintext file whose entries are already in
-//                    the unlocked vault does NOT trigger merge —
-//                    keeping the .txt after encrypting is a supported
-//                    path ("Skip — I'll delete it manually"), and
-//                    before this rule the state machine looped on the
-//                    unlock screen forever with a correct PIN.
+//   merge         → vault exists AND plaintext files exist (rotation /
+//                    new provider added). Show unlock first; the
+//                    merge happens in the unlock callback.
 //   locked        → vault exists, no plaintext, no in-memory key.
 //   unlocked      → vault exists and in-memory key is loaded.
 
@@ -46,44 +39,16 @@ export type AppStateInputs = {
   unlockedFiles: KeyFile[] | null;
 };
 
-// Semantic equality for "is this plaintext entry already in the
-// vault?". sourcePath is ignored (the vault copy legitimately keeps
-// the path it was imported from). Every other field counts: a user
-// who edits model= or clarify_redact= in the .txt expects a merge.
-const isCovered = (file: KeyFile, vaultFiles: KeyFile[]): boolean =>
-  vaultFiles.some(
-    v =>
-      v.provider === file.provider &&
-      v.key === file.key &&
-      v.model === file.model &&
-      v.defaultProvider === file.defaultProvider &&
-      v.clarifyRedact === file.clarifyRedact,
-  );
-
-// Plaintext entries the unlocked vault does NOT already contain —
-// the only ones that justify surfacing the merge flow. Exported for
-// the unlock callback, which uses it to skip a redundant vault
-// rewrite (a full PBKDF2 round) when everything is already covered.
-export const uncoveredPlaintextFiles = (
-  plaintextFiles: KeyFile[],
-  vaultFiles: KeyFile[],
-): KeyFile[] => plaintextFiles.filter(f => !isCovered(f, vaultFiles));
-
 export const computeAppState = (i: AppStateInputs): AppState => {
   // Fast paths that don't depend on encryption mode.
   if (i.vaultExists && i.unlockedFiles !== null) {
-    const uncovered = uncoveredPlaintextFiles(
-      i.plaintextFiles,
-      i.unlockedFiles,
-    );
-    if (uncovered.length > 0) {
-      // A .txt landed (or changed) since last unlock and carries
-      // content the vault doesn't have — surface the merge prompt so
-      // the user can fold it in.
+    if (i.plaintextFiles.length > 0) {
+      // Edge case: unlocked but a new .txt landed since last unlock.
+      // We still surface the merge prompt so the user can fold it in.
       return {
         kind: 'merge',
         vaultExists: true,
-        plaintextFiles: uncovered,
+        plaintextFiles: i.plaintextFiles,
       };
     }
     return {kind: 'unlocked', files: i.unlockedFiles};

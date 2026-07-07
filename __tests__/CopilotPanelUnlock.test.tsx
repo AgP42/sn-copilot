@@ -286,57 +286,6 @@ describe('CopilotPanel — merge state', () => {
   });
 });
 
-describe('CopilotPanel — kept plaintext file (field-report loop)', () => {
-  // The exact scenario from the field report: encrypt, keep the .txt
-  // ("Skip — I'll delete it manually"), reopen, unlock. Before the
-  // covered-subset rule the state machine recomputed 'merge' forever
-  // and the unlock screen looped with a correct PIN.
-  it('identical kept .txt: unlock reaches chat WITHOUT rewriting the vault', async () => {
-    await seedVault('123456', [sampleKey]);
-    seedTxt(); // same provider/model/key as the vault content
-    const renamesBefore = mockRenameToFile.mock.calls.length;
-    const tree = render();
-    await waitFor(tree, () => maybeFindByTestID(tree, 'unlock-screen') !== null);
-    act(() => {
-      findByTestID(tree, 'unlock-input').props.onChangeText('123456');
-    });
-    await act(async () => {
-      findByTestID(tree, 'unlock-submit').props.onPress();
-      await flushPromises();
-    });
-    await waitFor(tree, () => maybeFindByTestID(tree, 'chat-view') !== null);
-    // No merge happened: the vault was never rewritten (writeVault
-    // commits via renameToFile), because the .txt content is already
-    // covered by the vault.
-    expect(mockRenameToFile.mock.calls.length).toBe(renamesBefore);
-    // And the .txt is still there — keeping it is supported.
-    expect(fs.has(TXT_PATH)).toBe(true);
-  });
-
-  it('a genuinely different .txt still triggers the merge', async () => {
-    await seedVault('123456', [sampleKey]);
-    fs.set(
-      TXT_PATH,
-      new TextEncoder().encode(
-        'provider=anthropic\nmodel=claude-opus-4-8\nkey=sk-ant-x\n',
-      ),
-    );
-    const renamesBefore = mockRenameToFile.mock.calls.length;
-    const tree = render();
-    await waitFor(tree, () => maybeFindByTestID(tree, 'unlock-screen') !== null);
-    act(() => {
-      findByTestID(tree, 'unlock-input').props.onChangeText('123456');
-    });
-    await act(async () => {
-      findByTestID(tree, 'unlock-submit').props.onPress();
-      await flushPromises();
-    });
-    await waitFor(tree, () => maybeFindByTestID(tree, 'chat-view') !== null);
-    // The changed model was folded into the vault (rewrite happened).
-    expect(mockRenameToFile.mock.calls.length).toBeGreaterThan(renamesBefore);
-  });
-});
-
 describe('CopilotPanel — wrong PIN at the panel level', () => {
   it('shows the wrong-PIN message and stays on UnlockScreen', async () => {
     await seedVault('123456', [sampleKey]);

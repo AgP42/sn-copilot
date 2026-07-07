@@ -100,17 +100,6 @@ const looksLikeKeyFile = (v: unknown): v is KeyFile => {
   if (typeof o.sourcePath !== 'string') {
     return false;
   }
-  // Optional chat token cap. Absent on pre-max_tokens vaults; when
-  // present it must be a positive integer or the envelope is treated
-  // as corrupt (nothing we write can produce another shape).
-  if (
-    o.maxTokens !== undefined &&
-    (typeof o.maxTokens !== 'number' ||
-      !Number.isInteger(o.maxTokens) ||
-      o.maxTokens < 1)
-  ) {
-    return false;
-  }
   return true;
 };
 
@@ -272,8 +261,11 @@ export const writeVault = async (
   passphrase: string,
   files: KeyFile[],
 ): Promise<{key: Uint8Array}> => {
+  const logger = deps.logger ?? noopLogger;
   const salt = await randomBytes(SALT_LENGTH_BYTES);
   const key = await deriveKey(passphrase, salt, DEFAULT_KDF_PARAMS);
+  const inner = encodeUtf8(JSON.stringify({files}));
+  const payload = encrypt(key, inner);
   const envelope: SerializedVault = {
     version: VAULT_VERSION,
     kdf: {
@@ -281,65 +273,16 @@ export const writeVault = async (
       iterations: DEFAULT_KDF_PARAMS.iterations,
       saltB64: bytesToBase64(salt),
     },
-    ctB64: bytesToBase64(await encrypt(key, encodeUtf8(JSON.stringify({files})))),
+    ctB64: bytesToBase64(payload),
   };
-  await commitEnvelope(deps, envelope, key, files.length);
-  return {key};
-};
-
-// Re-encrypts the vault payload with an ALREADY-DERIVED key, reusing
-// the on-disk envelope's KDF params (salt + iterations). No PBKDF2,
-// no passphrase — the use case is an unlocked session editing a
-// non-secret field (e.g. the model id) without re-prompting for the
-// PIN. Reusing salt+key is sound: AES-GCM freshness comes from the
-// per-encryption nonce, and the KDF salt only ever binds passphrase →
-// key. The caller's key is sanity-checked against the current file
-// first so a stale in-memory key can never clobber a vault it does
-// not match (e.g. PIN changed from another surface).
-export const rewriteVault = async (
-  deps: VaultDeps,
-  key: Uint8Array,
-  files: KeyFile[],
-): Promise<void> => {
-  const exists = await deps.io.exists(deps.vaultPath);
-  if (!exists) {
-    throw new Error('rewriteVault: no vault on disk');
-  }
-  const bytes = await deps.io.readBytes(deps.vaultPath);
-  if (bytes === null || bytes.length === 0) {
-    throw new Error('rewriteVault: vault file unreadable');
-  }
-  const current = decryptVaultBytes(bytes, key);
-  if (current.kind !== 'ok') {
-    throw new Error(
-      `rewriteVault: in-memory key does not open the on-disk vault (${current.kind})`,
-    );
-  }
-  // Safe cast: decryptVaultBytes just validated the envelope shape.
-  const envelope = JSON.parse(decodeUtf8(bytes)) as SerializedVault;
-  envelope.ctB64 = bytesToBase64(
-    await encrypt(key, encodeUtf8(JSON.stringify({files}))),
-  );
-  await commitEnvelope(deps, envelope, key, files.length);
-};
-
-// Shared tmp-write → verify → rename tail for writeVault/rewriteVault.
-//
-// Verify re-reads tmp + decrypts with the SAME in-memory key. Skips
-// a redundant PBKDF2 (5-10s on Hermes) — catches the same class of
-// bugs (host-side "writeFileBase64 said success but didn't", base64
-// round-trip, etc.) without doubling the wait.
-const commitEnvelope = async (
-  deps: VaultDeps,
-  envelope: SerializedVault,
-  key: Uint8Array,
-  fileCount: number,
-): Promise<void> => {
-  const logger = deps.logger ?? noopLogger;
   const tmpPath = `${deps.vaultPath}${TMP_SUFFIX}`;
   const envelopeBytes = encodeUtf8(JSON.stringify(envelope));
   await deps.io.writeBytes(tmpPath, envelopeBytes);
 
+  // Verify: re-read tmp + decrypt with the SAME in-memory key. Skips
+  // a redundant PBKDF2 (5-10s on Hermes) — catches the same class of
+  // bugs (host-side "writeFileBase64 said success but didn't",
+  // base64 round-trip, etc.) without doubling the wait.
   let writtenBytes: Uint8Array | null = null;
   try {
     writtenBytes = await deps.io.readBytes(tmpPath);
@@ -368,5 +311,6 @@ const commitEnvelope = async (
     await deps.io.remove(tmpPath);
     throw new Error('vault rename failed; tmp removed, vault not committed');
   }
-  logger.log(`${TAG} wrote vault with ${fileCount} key file(s)`);
+  logger.log(`${TAG} wrote vault with ${files.length} key file(s)`);
+  return {key};
 };

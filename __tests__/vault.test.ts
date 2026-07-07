@@ -77,7 +77,7 @@ const buildEnvelope = async (over: Partial<{
 }> = {}): Promise<string> => {
   const salt = randomBytes(SALT_LENGTH_BYTES);
   const key = await deriveKey('hunter2', salt, DEFAULT_KDF_PARAMS);
-  const ct = await encrypt(key, utf8.encode(JSON.stringify({files: sampleFiles})));
+  const ct = encrypt(key, utf8.encode(JSON.stringify({files: sampleFiles})));
   return JSON.stringify({
     version: over.version ?? 1,
     kdf: {
@@ -184,7 +184,7 @@ describe('vault — corrupt envelope', () => {
     const io = createInMemoryFileIo();
     const salt = randomBytes(SALT_LENGTH_BYTES);
     const key = await deriveKey('hunter2', salt, DEFAULT_KDF_PARAMS);
-    const ct = await encrypt(key, utf8.encode('not json at all'));
+    const ct = encrypt(key, utf8.encode('not json at all'));
     io.fs.set(
       VAULT_PATH,
       utf8.encode(
@@ -203,7 +203,7 @@ describe('vault — corrupt envelope', () => {
     const io = createInMemoryFileIo();
     const salt = randomBytes(SALT_LENGTH_BYTES);
     const key = await deriveKey('hunter2', salt, DEFAULT_KDF_PARAMS);
-    const ct = await encrypt(key, utf8.encode(JSON.stringify({files: [{wrong: 'shape'}]})));
+    const ct = encrypt(key, utf8.encode(JSON.stringify({files: [{wrong: 'shape'}]})));
     io.fs.set(
       VAULT_PATH,
       utf8.encode(

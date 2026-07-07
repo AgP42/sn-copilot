@@ -40,7 +40,6 @@ import {readPersona, writePersona} from '../storage/personaFile';
 import {setEncryptionMode, setIdleTimeoutMin} from '../storage/prefs';
 import * as idleTimer from '../storage/idleTimer';
 import {
-  changeModel,
   changePin,
   disableEncryption,
   encryptInitial,
@@ -353,11 +352,11 @@ function SettingsViewBody(props: {
     await refresh();
   }, [bundle.prefsDeps, bundle.vaultDeps, refresh]);
 
-  // Model edit, both storage modes. Encrypted+unlocked → rewrite the
-  // vault with the cached derived key (changeModel flow). Plaintext /
-  // migrate → regenerate the .txt at its source path; comments in the
-  // user's file are not preserved (serializeKeyFile is the canonical
-  // form the parser reads back).
+  // Model edit — plaintext mode only. Regenerates the .txt at its
+  // source path (comments in the user's file are not preserved;
+  // serializeKeyFile is the canonical form the parser reads back).
+  // Encrypted vaults are intentionally NOT editable here — the vault
+  // flow is upstream's original behaviour.
   const onChangeModel = useCallback(
     async (
       provider: ProviderId,
@@ -366,18 +365,6 @@ function SettingsViewBody(props: {
       const trimmed = newModel.trim();
       if (trimmed.length === 0) {
         return {ok: false, reason: 'model must not be empty'};
-      }
-      if (state !== null && state.kind === 'unlocked') {
-        const r = await changeModel(
-          {vault: bundle.vaultDeps, prefs: bundle.prefsDeps},
-          provider,
-          trimmed,
-        );
-        if (!r.ok) {
-          return {ok: false, reason: r.reason};
-        }
-        await refresh();
-        return {ok: true};
       }
       if (
         state !== null &&
@@ -400,7 +387,7 @@ function SettingsViewBody(props: {
       }
       return {ok: false, reason: 'no editable key store in this state'};
     },
-    [bundle.io, bundle.prefsDeps, bundle.vaultDeps, refresh, state],
+    [bundle.io, refresh, state],
   );
 
   const onIdleTimeoutChange = useCallback(
@@ -587,9 +574,7 @@ function SettingsViewBody(props: {
             resolution={resolution}
             onChangeModel={
               state !== null &&
-              (state.kind === 'unlocked' ||
-                state.kind === 'plaintext' ||
-                state.kind === 'migrate')
+              (state.kind === 'plaintext' || state.kind === 'migrate')
                 ? onChangeModel
                 : undefined
             }

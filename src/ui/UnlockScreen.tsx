@@ -11,14 +11,7 @@
 // PIN — reset Copilot" action that deletes the vault.
 
 import React, {useCallback, useEffect, useRef, useState} from 'react';
-import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import {ScrollView, StyleSheet, Text, TextInput, TouchableOpacity} from 'react-native';
 
 const BASE_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 30_000;
@@ -34,17 +27,12 @@ export type UnlockScreenProps = {
   // sessionKey.setActiveKeys.
   onAttempt: (secret: string) => Promise<UnlockResult>;
   onReset: () => void;
-  // Closes the overlay WITHOUT unlocking. Before this existed, a
-  // failing unlock (wrong PIN, vault bug) left the user trapped on
-  // this screen with no exit — the only escape was restarting the
-  // device. Locked-out must never mean stuck.
-  onClose?: () => void;
 };
 
 export default function UnlockScreen(
   props: UnlockScreenProps,
 ): React.JSX.Element {
-  const {onAttempt, onReset, onClose} = props;
+  const {onAttempt, onReset} = props;
 
   const [secret, setSecret] = useState('');
   const [show, setShow] = useState(false);
@@ -113,18 +101,7 @@ export default function UnlockScreen(
 
   return (
     <ScrollView testID="unlock-screen" style={styles.root}>
-      <View style={styles.titleRow}>
-        <Text style={styles.title}>Unlock Copilot</Text>
-        {onClose !== undefined ? (
-          <TouchableOpacity
-            testID="unlock-close"
-            accessibilityLabel="Close Copilot without unlocking"
-            onPress={onClose}
-            style={styles.closeBtn}>
-            <Text style={styles.closeBtnText}>✕</Text>
-          </TouchableOpacity>
-        ) : null}
-      </View>
+      <Text style={styles.title}>Unlock Copilot</Text>
       <Text style={styles.body}>
         Enter the PIN you set when you encrypted your key file.
       </Text>
@@ -195,18 +172,6 @@ export default function UnlockScreen(
 const styles = StyleSheet.create({
   root: {flex: 1, padding: 16, backgroundColor: 'transparent'},
   title: {fontSize: 22, fontWeight: '600', color: '#000000', marginBottom: 12},
-  titleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  closeBtn: {
-    borderWidth: 1,
-    borderColor: '#000000',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  closeBtnText: {fontSize: 16, color: '#000000'},
   body: {fontSize: 14, color: '#000000', marginBottom: 16, lineHeight: 20},
   label: {fontSize: 13, color: '#000000', fontWeight: '600', marginBottom: 4},
   input: {

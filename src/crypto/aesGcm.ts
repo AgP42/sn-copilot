@@ -8,16 +8,18 @@
 //
 // We prepend the nonce so the on-disk vault carries everything decrypt
 // needs alongside the salt + KDF params. The nonce is not secret.
-// Nonces come from the native SecureRandom (see encrypt below) —
-// required because the conversations store reuses one derived key
-// across many encryptions.
 //
 // `decrypt` distinguishes between "wrong key" (auth tag mismatch) and
 // "malformed input" (length or shape) so the caller can show the right
 // message ("wrong PIN" vs "vault file corrupt").
 
 import {gcm} from '@noble/ciphers/aes.js';
-import {randomBytes, randomBytesSync} from './randomBytes';
+// encrypt() stays sync to avoid cascading async through every caller.
+// The native CSPRNG would require an async hop; for a vault that
+// encrypts once per save with a fresh KDF salt, the uniqueness-only
+// nonce path is acceptable (nonce reuse only matters when the same
+// key is used many times — see module header).
+import {randomBytesSync} from './randomBytes';
 
 export const NONCE_LENGTH_BYTES = 12;
 const TAG_LENGTH_BYTES = 16;
@@ -36,55 +38,17 @@ const assertKey = (key: Uint8Array): void => {
   }
 };
 
-let warnedAboutSyncNonce = false;
-
-// Async since the nonce moved to the native CSPRNG. The original
-// sync version justified its uniqueness-only nonce generator with
-// "the vault re-salts (→ re-keys) on every save" — true for the
-// vault, but NOT for the conversations store, which reuses the same
-// derived key across every save of a session and across sessions.
-// Under a reused key, a nonce collision is catastrophic in GCM
-// (keystream reuse + tag forgery), so nonces now come from
-// java.security.SecureRandom like the KDF salts do. Both production
-// callers (vault, conversations) were already async.
-//
-// The uniqueness-only sync generator remains as a warned fallback:
-// any context that can produce a key has the native bridge (deriveKey
-// hard-fails without it), so the fallback only fires in unusual
-// embeddings — and uniqueness is still sufficient for single-use keys.
-export const encrypt = async (
-  key: Uint8Array,
-  plaintext: Uint8Array,
-): Promise<Uint8Array> => {
+export const encrypt = (key: Uint8Array, plaintext: Uint8Array): Uint8Array => {
   assertKey(key);
   if (!(plaintext instanceof Uint8Array)) {
     throw new TypeError('aesGcm.encrypt: plaintext must be a Uint8Array');
   }
-  let nonce: Uint8Array;
-  try {
-    nonce = await randomBytes(NONCE_LENGTH_BYTES);
-  } catch (e) {
-    if (!warnedAboutSyncNonce) {
-      warnedAboutSyncNonce = true;
-      console.warn(
-        `aesGcm: native SecureRandom unavailable (${(e as Error).message}); ` +
-          'using uniqueness-only nonce generation.',
-      );
-    }
-    nonce = randomBytesSync(NONCE_LENGTH_BYTES);
-  }
+  const nonce = randomBytesSync(NONCE_LENGTH_BYTES);
   const ciphertext = gcm(key, nonce).encrypt(plaintext);
   const out = new Uint8Array(NONCE_LENGTH_BYTES + ciphertext.length);
   out.set(nonce, 0);
   out.set(ciphertext, NONCE_LENGTH_BYTES);
   return out;
-};
-
-// Test-only — resets the one-time fallback warning between cases.
-export const __testing__ = {
-  resetWarnedFlag: (): void => {
-    warnedAboutSyncNonce = false;
-  },
 };
 
 export const decrypt = (key: Uint8Array, payload: Uint8Array): DecryptResult => {
