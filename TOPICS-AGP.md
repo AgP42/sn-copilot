@@ -348,3 +348,14 @@ des tokens. Nice-to-have.
   fork, inoffensif, sera rendu caduc par T-CTX (qui supprime la regex
   comme condition d'attachement). Ne pas le compter comme feature.
 - A7 = T7 (buildPlugin.sh fail-fast) confirmé comme candidat upstream S.
+
+## FAIT — lot config (build 1.0.11, 2026-07-07)
+- T22 : sélecteur de modèles par provider (modelCatalog.ts, presets
+  cliquables + champ libre). IDs vérifiés web 2026-07-07.
+- T23 : reply cap éditable dans Settings (presets 256/1024/2048/4096 +
+  champ libre, vide=défaut, bornes 16-8192, erreur inline).
+- T22bis : 404 → "model id not found, check Settings" ; 401/403 →
+  "API key rejected, check your key file".
+Note : templates deepseek-chat/gemini-2.5-flash restés inchangés
+(choix auteur ; le picker propose les IDs à jour). deepseek-chat
+déprécié après 2026-07-24 → à signaler à l'auteur un jour.
