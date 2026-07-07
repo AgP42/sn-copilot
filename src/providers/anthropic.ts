@@ -58,6 +58,14 @@ export const createAnthropicClient = (
       max_tokens: req.maxTokens,
       system: req.systemPrompt,
       messages: [{role: 'user', content}],
+      // Top-level auto-caching: the API places a cache breakpoint on
+      // the last cacheable block. The stable request prefix (system
+      // prompt + page image, which precedes the user text) is then
+      // billed at ~10% of the input rate on subsequent sends in a
+      // session instead of full price. Below the model's minimum
+      // cacheable size this is silently a no-op — never an error —
+      // so it is safe to send unconditionally.
+      cache_control: {type: 'ephemeral'},
     };
     const res = await fetchFn(ENDPOINT, {
       method: 'POST',
@@ -74,7 +82,12 @@ export const createAnthropicClient = (
     }
     const data = (await res.json()) as {
       content?: unknown;
-      usage?: {input_tokens?: number; output_tokens?: number};
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      };
       model?: string;
     };
     return {
@@ -82,6 +95,10 @@ export const createAnthropicClient = (
       usage: {
         inputTokens: Number(data.usage?.input_tokens ?? 0),
         outputTokens: Number(data.usage?.output_tokens ?? 0),
+        cacheReadInputTokens: Number(data.usage?.cache_read_input_tokens ?? 0),
+        cacheCreationInputTokens: Number(
+          data.usage?.cache_creation_input_tokens ?? 0,
+        ),
       },
       latencyMs: Date.now() - start,
       modelId: typeof data.model === 'string' ? data.model : opts.model,
