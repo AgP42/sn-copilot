@@ -288,3 +288,33 @@ de se concentrer sur le fonctionnel utile. Conséquences :
   max_tokens en plaintext (A4/A3) est ce qui compte, pas le vault.
 - Focus roadmap : T-CTX (contexte/images/multi-fichiers) = LA feature
   demandée, puis T22/T23 (petits gains visibles).
+
+## CONTRAINTE FERME (prochaine version fork)
+Revenir STRICTEMENT au code original de l'auteur sur toute la feature
+chiffrement/vault. Cela signifie : `git checkout master --` sur tous les
+fichiers touchés côté vault, et retirer proprement ce qui en dépend
+côté nôtre. Fichiers à restaurer à l'identique master :
+  - src/crypto/aesGcm.ts       (annuler nonces natifs A5/PR5)
+  - src/storage/vault.ts       (annuler rewriteVault + maxTokens dans looksLikeKeyFile)
+  - src/storage/secureFlows.ts (annuler changeModel/changeMaxTokens + uncovered)
+  - src/storage/appState.ts    (annuler la règle uncovered A8)
+  - src/storage/conversations.ts (annuler `await encrypt`)
+  - src/storage/debugLogFile.ts  (SUPPRIMER — diag chiffrement)
+  - src/ui/UnlockScreen.tsx      (annuler bouton ✕ + onClose)
+  - src/ui/CopilotPanel.tsx      (annuler diag + uncovered ; garder le reste)
+POINTS D'ATTENTION (dépendances non-chiffrement à préserver) :
+  - keyFiles.ts : le parse `max_tokens=` (A3) est utile en PLAINTEXT →
+    à conserver, MAIS il ajoute maxTokens à KeyFile que vault.ts valide.
+    Si on revient au vault original, s'assurer que le champ optionnel
+    ne casse pas la validation (l'original ignore les champs inconnus ?
+    à vérifier — sinon garder juste le parse sans toucher au vault).
+  - SettingsView.tsx : l'édition modèle/max_tokens en PLAINTEXT (A3/A4)
+    est la feature utile → la garder, mais découplée du chemin vault
+    (changeModel encrypted retiré, edit plaintext conservé).
+  - Nonces GCM natifs (PR5/A5) : c'était une correction de SÉCURITÉ du
+    vault. Si on revient à l'original, on réintroduit le nonce sync —
+    acceptable puisque le vault n'est plus une cible de dev. PR #? déjà
+    ouverte ? NON (A5 = pr5, pas dans la wave 1). OK, rien d'envoyé.
+=> Faire une branche `fork-plaintext-only` propre : master + features
+   NON-chiffrement uniquement (A1,A2,A6,A9 déjà upstream + A3/A4 plaintext
+   + T-CTX + personas + multi-modèle). Repartir de là pour la suite.
