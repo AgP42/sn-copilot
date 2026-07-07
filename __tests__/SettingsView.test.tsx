@@ -245,6 +245,96 @@ describe('SettingsView — discovery: one valid key file', () => {
     expect(written).toContain('key=sk-ant-test123');
   });
 
+  it('model preset chips set the draft and save writes the .txt', async () => {
+    mockListFiles.mockResolvedValueOnce([
+      fileEntry(
+        '/storage/emulated/0/MyStyle/SnCopilot/copilot-key-anthropic.txt',
+      ),
+    ]);
+    const {tree} = renderSettings();
+    await act(async () => {
+      await flushPromises();
+    });
+    // The anthropic catalog is rendered as tappable presets.
+    expect(findByTestID(tree, 'settings-model-presets')).toBeDefined();
+    act(() => {
+      findByTestID(
+        tree,
+        'settings-model-preset-claude-opus-4-8',
+      ).props.onPress();
+    });
+    // Tapping a preset fills the input.
+    expect(findByTestID(tree, 'settings-model-input').props.value).toBe(
+      'claude-opus-4-8',
+    );
+    await act(async () => {
+      findByTestID(tree, 'settings-model-save').props.onPress();
+      await flushPromises();
+    });
+    const overlay = jest.requireMock('../src/native/CopilotOverlay').default;
+    const calls = (overlay.writeFileBase64 as jest.Mock).mock.calls.filter(
+      (c: string[]) => c[0].includes('copilot-key-anthropic.txt'),
+    );
+    const last = calls[calls.length - 1];
+    expect(last).toBeDefined();
+    expect(Buffer.from(last[1], 'base64').toString('utf8')).toContain(
+      'model=claude-opus-4-8',
+    );
+  });
+
+  it('edits the reply cap in plaintext mode (preset + save writes max_tokens=)', async () => {
+    mockListFiles.mockResolvedValueOnce([
+      fileEntry(
+        '/storage/emulated/0/MyStyle/SnCopilot/copilot-key-anthropic.txt',
+      ),
+    ]);
+    const {tree} = renderSettings();
+    await act(async () => {
+      await flushPromises();
+    });
+    act(() => {
+      findByTestID(tree, 'settings-maxtokens-preset-1024').props.onPress();
+    });
+    expect(findByTestID(tree, 'settings-maxtokens-input').props.value).toBe(
+      '1024',
+    );
+    await act(async () => {
+      findByTestID(tree, 'settings-maxtokens-save').props.onPress();
+      await flushPromises();
+    });
+    expect(maybeFindByTestID(tree, 'settings-maxtokens-error')).toBeNull();
+    const overlay = jest.requireMock('../src/native/CopilotOverlay').default;
+    const calls = (overlay.writeFileBase64 as jest.Mock).mock.calls.filter(
+      (c: string[]) => c[0].includes('copilot-key-anthropic.txt'),
+    );
+    const last = calls[calls.length - 1];
+    expect(Buffer.from(last[1], 'base64').toString('utf8')).toContain(
+      'max_tokens=1024',
+    );
+  });
+
+  it('rejects an out-of-bounds reply cap with an inline error', async () => {
+    mockListFiles.mockResolvedValueOnce([
+      fileEntry(
+        '/storage/emulated/0/MyStyle/SnCopilot/copilot-key-anthropic.txt',
+      ),
+    ]);
+    const {tree} = renderSettings();
+    await act(async () => {
+      await flushPromises();
+    });
+    act(() => {
+      findByTestID(tree, 'settings-maxtokens-input').props.onChangeText(
+        '999999',
+      );
+    });
+    await act(async () => {
+      findByTestID(tree, 'settings-maxtokens-save').props.onPress();
+      await flushPromises();
+    });
+    expect(findByTestID(tree, 'settings-maxtokens-error')).toBeDefined();
+  });
+
   it('shows active provider/model/masked-key/source', async () => {
     const {tree} = renderSettings();
     await act(async () => {
@@ -258,8 +348,10 @@ describe('SettingsView — discovery: one valid key file', () => {
     expect(findByTestID(tree, 'settings-model-input').props.value).toBe(
       'claude-haiku-4-5',
     );
-    // The active reply cap is surfaced for observability (default here).
-    expect(textOf(tree, 'settings-active-maxtokens')).toContain('256');
+    // In plaintext mode the reply cap is an editable input (empty =
+    // default) rather than the read-only observability line.
+    expect(maybeFindByTestID(tree, 'settings-active-maxtokens')).toBeNull();
+    expect(findByTestID(tree, 'settings-maxtokens-input').props.value).toBe('');
     // Key is masked: first 7 chars + bullets + ellipsis. NOT raw.
     expect(textOf(tree, 'settings-active-key')).not.toContain('sk-ant-test123');
     expect(textOf(tree, 'settings-active-key')).toContain('sk-ant-');

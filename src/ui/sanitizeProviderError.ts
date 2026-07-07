@@ -14,7 +14,17 @@ export const sanitizeProviderError = (err: unknown): string => {
   }
   const httpMatch = raw.match(/^([a-zA-Z][a-zA-Z0-9_-]*):\s*HTTP\s+(\d+)/);
   if (httpMatch) {
-    return `${httpMatch[1]}: HTTP ${httpMatch[2]}`;
+    const [, provider, status] = httpMatch;
+    // A 404 from a provider almost always means the model id is
+    // wrong (or wrong-cased) — the single most common config mistake.
+    // Point the user at the fix instead of a bare status code.
+    if (status === '404') {
+      return `${provider}: HTTP 404 — model id not found. Check the Model in Settings.`;
+    }
+    if (status === '401' || status === '403') {
+      return `${provider}: HTTP ${status} — API key rejected. Check your key file.`;
+    }
+    return `${provider}: HTTP ${status}`;
   }
   return 'Provider request failed.';
 };

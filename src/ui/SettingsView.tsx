@@ -48,8 +48,11 @@ import {
 } from '../storage/secureFlows';
 import {getActiveKeys} from '../storage/sessionKey';
 import {serializeKeyFile} from '../storage/keyFiles';
+import {catalogFor} from './modelCatalog';
 import {encodeUtf8} from '../sdk/utf8';
 import {
+  CHAT_MAX_TOKENS_MAX,
+  CHAT_MAX_TOKENS_MIN,
   DEFAULT_CHAT_MAX_TOKENS,
   type CustomAction,
   type KeyFile,
@@ -352,42 +355,73 @@ function SettingsViewBody(props: {
     await refresh();
   }, [bundle.prefsDeps, bundle.vaultDeps, refresh]);
 
-  // Model edit — plaintext mode only. Regenerates the .txt at its
-  // source path (comments in the user's file are not preserved;
-  // serializeKeyFile is the canonical form the parser reads back).
-  // Encrypted vaults are intentionally NOT editable here — the vault
-  // flow is upstream's original behaviour.
-  const onChangeModel = useCallback(
+  // Key-file field edit — plaintext mode only. Regenerates the .txt
+  // at its source path (comments in the user's file are not
+  // preserved; serializeKeyFile is the canonical form the parser
+  // reads back). Encrypted vaults are intentionally NOT editable here
+  // — the vault flow is upstream's original behaviour.
+  const writeKeyFilePatch = useCallback(
     async (
       provider: ProviderId,
-      newModel: string,
+      patch: Partial<KeyFile>,
     ): Promise<{ok: true} | {ok: false; reason: string}> => {
+      if (
+        state === null ||
+        !(state.kind === 'plaintext' || state.kind === 'migrate')
+      ) {
+        return {ok: false, reason: 'no editable key store in this state'};
+      }
+      const target = state.files.find(f => f.provider === provider);
+      if (target === undefined) {
+        return {ok: false, reason: `no key file for provider "${provider}"`};
+      }
+      try {
+        await bundle.io.writeBytes(
+          target.sourcePath,
+          encodeUtf8(serializeKeyFile({...target, ...patch})),
+        );
+      } catch (e) {
+        return {ok: false, reason: (e as Error).message};
+      }
+      await refresh();
+      return {ok: true};
+    },
+    [bundle.io, refresh, state],
+  );
+
+  const onChangeModel = useCallback<ChangeModelFn>(
+    async (provider, newModel) => {
       const trimmed = newModel.trim();
       if (trimmed.length === 0) {
         return {ok: false, reason: 'model must not be empty'};
       }
-      if (
-        state !== null &&
-        (state.kind === 'plaintext' || state.kind === 'migrate')
-      ) {
-        const target = state.files.find(f => f.provider === provider);
-        if (target === undefined) {
-          return {ok: false, reason: `no key file for provider "${provider}"`};
-        }
-        try {
-          await bundle.io.writeBytes(
-            target.sourcePath,
-            encodeUtf8(serializeKeyFile({...target, model: trimmed})),
-          );
-        } catch (e) {
-          return {ok: false, reason: (e as Error).message};
-        }
-        await refresh();
-        return {ok: true};
-      }
-      return {ok: false, reason: 'no editable key store in this state'};
+      return writeKeyFilePatch(provider, {model: trimmed});
     },
-    [bundle.io, refresh, state],
+    [writeKeyFilePatch],
+  );
+
+  // max_tokens edit. An empty value clears the override (falls back to
+  // the default cap); otherwise it must be an integer in bounds.
+  const onChangeMaxTokens = useCallback<ChangeMaxTokensFn>(
+    async (provider, raw) => {
+      const trimmed = raw.trim();
+      if (trimmed.length === 0) {
+        return writeKeyFilePatch(provider, {maxTokens: undefined});
+      }
+      const n = Number(trimmed);
+      if (
+        !Number.isInteger(n) ||
+        n < CHAT_MAX_TOKENS_MIN ||
+        n > CHAT_MAX_TOKENS_MAX
+      ) {
+        return {
+          ok: false,
+          reason: `must be an integer ${CHAT_MAX_TOKENS_MIN}-${CHAT_MAX_TOKENS_MAX} (or empty for default)`,
+        };
+      }
+      return writeKeyFilePatch(provider, {maxTokens: n});
+    },
+    [writeKeyFilePatch],
   );
 
   const onIdleTimeoutChange = useCallback(
@@ -578,6 +612,12 @@ function SettingsViewBody(props: {
                 ? onChangeModel
                 : undefined
             }
+            onChangeMaxTokens={
+              state !== null &&
+              (state.kind === 'plaintext' || state.kind === 'migrate')
+                ? onChangeMaxTokens
+                : undefined
+            }
           />
         ) : null}
         {errors.length > 0 ? (
@@ -686,21 +726,21 @@ function CleanupPrompt(props: {
   );
 }
 
-// onChangeModel present ⇔ the vault is encrypted AND unlocked — the
-// only state where editing in Settings is the right surface (the
-// plaintext .txt stays user-managed, and a locked vault can't be
-// rewritten).
-type ChangeModelFn = (
-  provider: ProviderId,
-  newModel: string,
-) => Promise<{ok: true} | {ok: false; reason: string}>;
+// Present ⇔ the key store is an editable plaintext .txt. The picker
+// writes the .txt in place; encrypted vaults keep upstream's
+// read-only behaviour here.
+type EditResult = Promise<{ok: true} | {ok: false; reason: string}>;
+type ChangeModelFn = (provider: ProviderId, newModel: string) => EditResult;
+type ChangeMaxTokensFn = (provider: ProviderId, raw: string) => EditResult;
 
 function KeyFileBlock({
   resolution,
   onChangeModel,
+  onChangeMaxTokens,
 }: {
   resolution: ProviderResolution;
   onChangeModel?: ChangeModelFn;
+  onChangeMaxTokens?: ChangeMaxTokensFn;
 }): React.JSX.Element {
   if (resolution.kind === 'none') {
     return (
@@ -726,14 +766,16 @@ function KeyFileBlock({
     <ActiveProviderBlock
       active={resolution.active}
       onChangeModel={onChangeModel}
+      onChangeMaxTokens={onChangeMaxTokens}
     />
   );
 }
 
-// Model row in edit mode (encrypted + unlocked only). Save is
-// disabled while the value is unchanged or empty; failures surface
-// inline (the vault rewrite can fail — e.g. locked out from under us
-// by the idle timer — and the user needs to see why).
+// Model row in edit mode (plaintext .txt). A curated per-provider
+// shortlist of tappable presets sits above a free-text field — the
+// list saves typing (and mis-casing, which yields a cryptic 404),
+// the field keeps any brand-new id working. Save is disabled while
+// unchanged/empty; write failures surface inline.
 function EditableModelRow({
   active,
   onChangeModel,
@@ -765,8 +807,34 @@ function EditableModelRow({
     }
   };
 
+  const presets = catalogFor(active.provider);
+
   return (
     <View>
+      {presets.length > 0 ? (
+        <View testID="settings-model-presets" style={styles.presetWrap}>
+          {presets.map(m => {
+            const selected = draft.trim() === m.id;
+            return (
+              <TouchableOpacity
+                key={m.id}
+                testID={`settings-model-preset-${m.id}`}
+                accessibilityLabel={`Use model ${m.id}`}
+                onPress={() => setDraft(m.id)}
+                style={[styles.presetChip, selected && styles.presetChipOn]}>
+                <Text
+                  style={[
+                    styles.presetChipText,
+                    selected && styles.presetChipTextOn,
+                  ]}>
+                  {m.label}
+                  {m.note ? ` · ${m.note}` : ''}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ) : null}
       <View style={styles.fieldRow}>
         <Text style={styles.fieldLabel}>Model</Text>
         <TextInput
@@ -806,12 +874,112 @@ function EditableModelRow({
   );
 }
 
+// Reply-cap row in edit mode (plaintext .txt). Preset chips for
+// common caps + a free-text field; empty clears the override (→
+// default). Bounds are validated in the callback.
+const MAX_TOKENS_PRESETS = [256, 1024, 2048, 4096];
+
+function EditableMaxTokensRow({
+  active,
+  onChangeMaxTokens,
+}: {
+  active: KeyFile;
+  onChangeMaxTokens: ChangeMaxTokensFn;
+}): React.JSX.Element {
+  const current = active.maxTokens;
+  const [draft, setDraft] = useState<string>(
+    current !== undefined ? String(current) : '',
+  );
+  const [saveState, setSaveState] = useState<
+    {kind: 'idle'} | {kind: 'saving'} | {kind: 'error'; reason: string}
+  >({kind: 'idle'});
+
+  useEffect(() => {
+    setDraft(current !== undefined ? String(current) : '');
+    setSaveState({kind: 'idle'});
+  }, [active.provider, current]);
+
+  const normalized = draft.trim();
+  const dirty = normalized !== (current !== undefined ? String(current) : '');
+
+  const onSave = async (): Promise<void> => {
+    setSaveState({kind: 'saving'});
+    const r = await onChangeMaxTokens(active.provider, draft);
+    setSaveState(r.ok ? {kind: 'idle'} : {kind: 'error', reason: r.reason});
+  };
+
+  return (
+    <View>
+      <View style={styles.presetWrap}>
+        {MAX_TOKENS_PRESETS.map(n => {
+          const selected = normalized === String(n);
+          return (
+            <TouchableOpacity
+              key={n}
+              testID={`settings-maxtokens-preset-${n}`}
+              accessibilityLabel={`Set reply cap to ${n} tokens`}
+              onPress={() => setDraft(String(n))}
+              style={[styles.presetChip, selected && styles.presetChipOn]}>
+              <Text
+                style={[
+                  styles.presetChipText,
+                  selected && styles.presetChipTextOn,
+                ]}>
+                {n}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <View style={styles.fieldRow}>
+        <Text style={styles.fieldLabel}>Reply cap</Text>
+        <TextInput
+          testID="settings-maxtokens-input"
+          accessibilityLabel="Reply cap in tokens (empty = default)"
+          style={[styles.fieldValue, styles.mono, styles.modelInput]}
+          value={draft}
+          onChangeText={setDraft}
+          keyboardType="number-pad"
+          placeholder={`${DEFAULT_CHAT_MAX_TOKENS} (default)`}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <TouchableOpacity
+          testID="settings-maxtokens-save"
+          accessibilityLabel="Save reply cap"
+          disabled={!dirty || saveState.kind === 'saving'}
+          onPress={onSave}
+          style={[
+            styles.modelSaveBtn,
+            (!dirty || saveState.kind === 'saving') && styles.modelSaveBtnOff,
+          ]}>
+          <Text
+            style={[
+              styles.modelSaveBtnText,
+              (!dirty || saveState.kind === 'saving') &&
+                styles.modelSaveBtnTextOff,
+            ]}>
+            {saveState.kind === 'saving' ? '…' : 'Save'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+      {saveState.kind === 'error' ? (
+        <Text testID="settings-maxtokens-error" style={styles.modelError}>
+          Could not save reply cap: {saveState.reason}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 function ActiveProviderBlock({
   active,
   onChangeModel,
+  onChangeMaxTokens,
 }: {
   active: KeyFile;
   onChangeModel?: ChangeModelFn;
+  onChangeMaxTokens?: ChangeMaxTokensFn;
 }): React.JSX.Element {
   return (
     <View testID="settings-resolution-ok" style={styles.activeBlock}>
@@ -831,14 +999,21 @@ function ActiveProviderBlock({
       ) : (
         <EditableModelRow active={active} onChangeModel={onChangeModel} />
       )}
-      <View style={styles.fieldRow}>
-        <Text style={styles.fieldLabel}>Reply cap</Text>
-        <Text testID="settings-active-maxtokens" style={styles.fieldValue}>
-          {active.maxTokens !== undefined
-            ? `${active.maxTokens} tokens (max_tokens=)`
-            : `${DEFAULT_CHAT_MAX_TOKENS} tokens (default)`}
-        </Text>
-      </View>
+      {onChangeMaxTokens === undefined ? (
+        <View style={styles.fieldRow}>
+          <Text style={styles.fieldLabel}>Reply cap</Text>
+          <Text testID="settings-active-maxtokens" style={styles.fieldValue}>
+            {active.maxTokens !== undefined
+              ? `${active.maxTokens} tokens (max_tokens=)`
+              : `${DEFAULT_CHAT_MAX_TOKENS} tokens (default)`}
+          </Text>
+        </View>
+      ) : (
+        <EditableMaxTokensRow
+          active={active}
+          onChangeMaxTokens={onChangeMaxTokens}
+        />
+      )}
       <View style={styles.fieldRow}>
         <Text style={styles.fieldLabel}>API key</Text>
         <Text
@@ -931,6 +1106,28 @@ const styles = StyleSheet.create({
   },
   // Editable model row (encrypted + unlocked). High-contrast border
   // so the affordance is visible on e-ink.
+  presetWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 8,
+  },
+  presetChip: {
+    borderWidth: 1,
+    borderColor: '#000000',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  presetChipOn: {
+    backgroundColor: '#000000',
+  },
+  presetChipText: {
+    fontSize: 12,
+    color: '#000000',
+  },
+  presetChipTextOn: {
+    color: '#ffffff',
+  },
   modelInput: {
     flex: 1,
     borderWidth: 1,
