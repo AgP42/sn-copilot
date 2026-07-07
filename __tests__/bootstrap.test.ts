@@ -151,11 +151,8 @@ describe('index.js bootstrap', () => {
     });
     mockCaptureCurrentPage.mockReset();
     mockCaptureCurrentPage.mockResolvedValue(null);
-<<<<<<< HEAD
     mockSweepScratchOrphans.mockClear();
-=======
     mockCleanupOldVersions.mockClear();
->>>>>>> pr6-plugin-janitor
     mockSetPageContextPromise.mockClear();
     const {__testing__} = require('../src/pluginRouter');
     __testing__.reset();
@@ -172,7 +169,6 @@ describe('index.js bootstrap', () => {
     require('../index.js');
   };
 
-<<<<<<< HEAD
   it('fires the scratch-orphan sweep at bootstrap with wired file bridges', async () => {
     importBootstrap();
     await drainMicrotasks();
@@ -195,7 +191,8 @@ describe('index.js bootstrap', () => {
       deleteFile?: unknown;
     };
     expect(typeof deps.deleteFile).toBe('function');
-=======
+  });
+
   it('runs the old-version janitor at bootstrap with the plugin dir', async () => {
     importBootstrap();
     await drainMicrotasks();
@@ -215,7 +212,6 @@ describe('index.js bootstrap', () => {
     } finally {
       log.mockRestore();
     }
->>>>>>> pr6-plugin-janitor
   });
 
   it('registers App + SnCopilotPanel components and inits the plugin manager', () => {
