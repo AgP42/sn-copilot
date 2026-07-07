@@ -318,3 +318,27 @@ POINTS D'ATTENTION (dépendances non-chiffrement à préserver) :
 => Faire une branche `fork-plaintext-only` propre : master + features
    NON-chiffrement uniquement (A1,A2,A6,A9 déjà upstream + A3/A4 plaintext
    + T-CTX + personas + multi-modèle). Repartir de là pour la suite.
+
+### T25 — Chat ne scrolle pas en bas après réponse (vrai défaut UX)
+2026-07-07 Manta : après une réponse, le ScrollView reste en haut, il
+faut scroller à la main pour voir la fin. Fix : auto-scroll-to-end à
+chaque nouveau message (ref sur le ScrollView + scrollToEnd dans un
+effect sur messages, ou onContentSizeChange). Petit, sûr, ChatView.tsx.
+FEATURE FONCTIONNELLE PURE, aucun rapport chiffrement — bon candidat.
+
+### T26 — Édition modèle en mode chiffré casse (vault ≠ .txt)
+Manta : édit modèle opus en mode unlocked → changeModel met à jour le
+VAULT mais pas le .txt → au refresh, uncoveredPlaintextFiles voit
+.txt(haiku)≠vault(opus) → état 'merge' → champ modèle non éditable +
+affichage incohérent (haiku/1024). Interaction directe A8 ↔ changeModel.
+=> Cohérent avec la décision d'abandonner le chiffrement : en mode
+plaintext pur (pas de vault), l'édition modèle écrit le .txt, pas de
+conflit. NE PAS corriger côté vault (on l'abandonne). Documenter :
+disable encryption pour revenir en plaintext.
+
+### T27 — max_tokens : plafond ≠ cible (malentendu, pas un bug)
+1024 tokens → 16 lignes : normal, le modèle choisit sa longueur sous le
+plafond. Pour rallonger : prompt ("réponds en détail") ou system prompt.
+Piste UX : la ligne "Reply cap" pourrait être renommée/clarifiée, ou un
+préréglage de style de réponse (bref/normal/détaillé) plus parlant que
+des tokens. Nice-to-have.
