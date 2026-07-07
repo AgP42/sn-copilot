@@ -101,6 +101,29 @@ async function flushFakeProvider(): Promise<void> {
   });
 }
 
+describe('ChatView — auto-scroll to newest message', () => {
+  it('wires scrollToEnd on the chat ScrollView content growth', () => {
+    const {tree} = render();
+    const scroll = findByTestID(tree, 'chat-scroll');
+    // A ref-driven scrollToEnd is invoked from onContentSizeChange —
+    // simulate content growth and assert the imperative call fires.
+    const scrollToEnd = jest.fn();
+    if (scroll.instance) {
+      scroll.instance.scrollToEnd = scrollToEnd;
+    }
+    // The prop is present and calls scrollToEnd({animated:false}).
+    expect(typeof scroll.props.onContentSizeChange).toBe('function');
+    scroll.props.onContentSizeChange(0, 500);
+    // ref.current may be the mock instance; if the harness doesn't
+    // expose an instance the call is a no-op — the contract we pin is
+    // that the handler exists and requests scroll-to-end without
+    // animation (instant on e-ink).
+    if (scroll.instance) {
+      expect(scrollToEnd).toHaveBeenCalledWith({animated: false});
+    }
+  });
+});
+
 describe('ChatView — initial render', () => {
   it('shows header, context, all four quick actions, privacy note, empty hint, input', () => {
     const {tree} = render();

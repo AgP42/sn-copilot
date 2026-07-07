@@ -289,6 +289,14 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // Keep the newest message in view. On e-ink a fresh reply lands
+  // below the fold and the user had to scroll down by hand every turn
+  // — jump to the end whenever the content grows (new message, or a
+  // reply streaming in). scrollToEnd on content-size-change is more
+  // reliable than a messages effect: the layout has actually grown by
+  // the time it fires.
+  const scrollRef = useRef<ScrollView>(null);
   const [input, setInput] = useState<string>('');
   const [busy, setBusy] = useState<boolean>(false);
   const [fontSize, setFontSize] = useState<FontSize>('S');
@@ -801,8 +809,12 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
       ) : (
         <ScrollView
           testID="chat-scroll"
+          ref={scrollRef}
           style={styles.chatScroll}
-          contentContainerStyle={styles.chatContent}>
+          contentContainerStyle={styles.chatContent}
+          onContentSizeChange={() =>
+            scrollRef.current?.scrollToEnd({animated: false})
+          }>
           {!hasKeyFile ? (
             <SetupChecklist
               testID="chat-setup-checklist"
