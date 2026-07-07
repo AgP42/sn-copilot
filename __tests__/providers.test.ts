@@ -113,7 +113,12 @@ describe('createAnthropicClient', () => {
     });
 
     expect(r.text).toBe('Hi there.');
-    expect(r.usage).toEqual({inputTokens: 12, outputTokens: 7});
+    expect(r.usage).toEqual({
+      inputTokens: 12,
+      outputTokens: 7,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    });
     expect(r.modelId).toBe('claude-haiku-4-5-real');
     expect(r.latencyMs).toBeGreaterThanOrEqual(0);
     expect(client.id).toBe('anthropic');
@@ -124,7 +129,12 @@ describe('createAnthropicClient', () => {
     const client = createAnthropicClient(fetchFn as unknown as typeof fetch);
     const r = await client.send(baseReq(), {apiKey: 'k', model: 'm'});
     expect(r.text).toBe('');
-    expect(r.usage).toEqual({inputTokens: 0, outputTokens: 0});
+    expect(r.usage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    });
     // Falls back to opts.model when response carries no model
     expect(r.modelId).toBe('m');
   });
@@ -514,6 +524,52 @@ describe('image attachment per provider', () => {
     } finally {
       log.mockRestore();
     }
+  });
+});
+
+describe('createAnthropicClient — prompt caching', () => {
+  it('sends the top-level auto-cache breakpoint on every request', async () => {
+    const fetchFn: FetchSpy = jest.fn().mockResolvedValue(
+      buildOk({
+        content: [{type: 'text', text: 'ok'}],
+        usage: {input_tokens: 1, output_tokens: 1},
+      }),
+    );
+    const client = createAnthropicClient(fetchFn as unknown as typeof fetch);
+    await client.send(baseReq(), {apiKey: 'k', model: 'm'});
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body as string);
+    expect(body.cache_control).toEqual({type: 'ephemeral'});
+  });
+
+  it('maps cache usage fields from the response', async () => {
+    const fetchFn: FetchSpy = jest.fn().mockResolvedValue(
+      buildOk({
+        content: [{type: 'text', text: 'ok'}],
+        usage: {
+          input_tokens: 12,
+          output_tokens: 7,
+          cache_read_input_tokens: 4096,
+          cache_creation_input_tokens: 128,
+        },
+      }),
+    );
+    const client = createAnthropicClient(fetchFn as unknown as typeof fetch);
+    const r = await client.send(baseReq(), {apiKey: 'k', model: 'm'});
+    expect(r.usage.cacheReadInputTokens).toBe(4096);
+    expect(r.usage.cacheCreationInputTokens).toBe(128);
+  });
+
+  it('defaults cache usage to 0 when the API omits the fields', async () => {
+    const fetchFn: FetchSpy = jest.fn().mockResolvedValue(
+      buildOk({
+        content: [{type: 'text', text: 'ok'}],
+        usage: {input_tokens: 12, output_tokens: 7},
+      }),
+    );
+    const client = createAnthropicClient(fetchFn as unknown as typeof fetch);
+    const r = await client.send(baseReq(), {apiKey: 'k', model: 'm'});
+    expect(r.usage.cacheReadInputTokens).toBe(0);
+    expect(r.usage.cacheCreationInputTokens).toBe(0);
   });
 });
 
