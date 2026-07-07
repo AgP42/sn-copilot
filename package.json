@@ -1,6 +1,6 @@
 {
   "name": "SnCopilot",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "On-device AI assistant for Supernote notes and PDFs. BYOK \u2014 bring your own API key for Anthropic, OpenAI, Google Gemini, or DeepSeek.",
   "private": true,
   "scripts": {
