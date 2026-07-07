@@ -147,10 +147,14 @@ describe('ChatView smart routing — quick actions always attach', () => {
 });
 
 describe('ChatView smart routing — freeform input', () => {
-  it('page-referential freeform attaches page context', async () => {
+  it('freeform does NOT attach by default (toggle off) even if page-referential', async () => {
     seedPage();
     const spy = jest.spyOn(fakeProvider, 'send');
     const tree = render();
+    // Let the mount effect load the thumbnail.
+    await act(async () => {
+      await flushSend();
+    });
     act(() => {
       findByTestID(tree, 'chat-input').props.onChangeText('Summarize this page');
     });
@@ -159,8 +163,63 @@ describe('ChatView smart routing — freeform input', () => {
     });
     await flushSend();
     const call = spy.mock.calls[0][0];
+    // No regex gate: wording no longer attaches the page. Off by default.
+    expect(call.userText).not.toContain('--- Page content (transcribed) ---');
+    expect(call.imageBase64).toBeUndefined();
+    spy.mockRestore();
+  });
+
+  it('freeform attaches the page when the thumbnail toggle is ON', async () => {
+    seedPage();
+    const spy = jest.spyOn(fakeProvider, 'send');
+    const tree = render();
+    // Mount effect loads pageCtx → the attach row renders.
+    await act(async () => {
+      await flushSend();
+    });
+    act(() => {
+      findByTestID(tree, 'chat-page-attach').props.onPress();
+    });
+    act(() => {
+      findByTestID(tree, 'chat-input').props.onChangeText('anything at all');
+    });
+    act(() => {
+      findByTestID(tree, 'chat-send').props.onPress();
+    });
+    await flushSend();
+    const call = spy.mock.calls[0][0];
     expect(call.userText).toContain('--- Page content (transcribed) ---');
     expect(call.imageBase64).toBe(PAGE_B64);
+    spy.mockRestore();
+  });
+
+  it('the toggle resets to off after a freeform send (per-message opt-in)', async () => {
+    seedPage();
+    const spy = jest.spyOn(fakeProvider, 'send');
+    const tree = render();
+    await act(async () => {
+      await flushSend();
+    });
+    act(() => {
+      findByTestID(tree, 'chat-page-attach').props.onPress();
+    });
+    act(() => {
+      findByTestID(tree, 'chat-input').props.onChangeText('first');
+    });
+    act(() => {
+      findByTestID(tree, 'chat-send').props.onPress();
+    });
+    await flushSend();
+    // Second freeform send: toggle should be back off → no image.
+    act(() => {
+      findByTestID(tree, 'chat-input').props.onChangeText('second');
+    });
+    act(() => {
+      findByTestID(tree, 'chat-send').props.onPress();
+    });
+    await flushSend();
+    expect(spy.mock.calls[0][0].imageBase64).toBe(PAGE_B64);
+    expect(spy.mock.calls[1][0].imageBase64).toBeUndefined();
     spy.mockRestore();
   });
 
@@ -220,5 +279,33 @@ describe('ChatView smart routing — freeform input', () => {
     expect(call.userText).toBe('Explain this page');
     expect(call.imageBase64).toBeUndefined();
     spy.mockRestore();
+  });
+});
+
+describe('ChatView — page attach thumbnail (B1a)', () => {
+  it('renders the thumbnail + label once the page loads', async () => {
+    seedPage();
+    const tree = render();
+    await act(async () => {
+      await flushSend();
+    });
+    expect(findByTestID(tree, 'chat-page-attach')).toBeDefined();
+    expect(findByTestID(tree, 'chat-page-thumb').props.source.uri).toContain(
+      PAGE_B64,
+    );
+  });
+
+  it('text-only provider shows the image-not-sent hint when attached', async () => {
+    seedPage();
+    const tree = render({keyFile: DEEPSEEK_KEY, provider: 'DeepSeek'});
+    await act(async () => {
+      await flushSend();
+    });
+    act(() => {
+      findByTestID(tree, 'chat-page-attach').props.onPress();
+    });
+    const {findAllText} = require('./helpers/textTraversal');
+    const all = findAllText(tree).join(' | ');
+    expect(all.toLowerCase()).toContain('text only');
   });
 });

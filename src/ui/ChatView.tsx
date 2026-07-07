@@ -42,7 +42,11 @@ import CopilotOverlay from '../native/CopilotOverlay';
 import {debugLog, infoLog} from '../diagnostics/log';
 import {redactPii} from '../privacy/redact';
 import {tryAcquire, release} from '../reentrancy/inFlightGuard';
-import {getFreshPageContext} from '../scope/pageContext';
+import {
+  getFreshPageContext,
+  getPageContext,
+  type PageContext,
+} from '../scope/pageContext';
 import {
   conversationPreview,
   DEFAULT_CHAT_MAX_TOKENS,
@@ -61,7 +65,7 @@ import {
 } from '../storage/conversations';
 import {composeUserText} from '../scope/composePrompt';
 import {buildProviderHistory} from './providerHistory';
-import {shouldAttachPageContext, type SendSource} from './contextRouting';
+import {type SendSource} from './contextRouting';
 import {buildMarkdownStyles} from './markdownStyles';
 import {markdownToPlainText} from './markdownToPlain';
 import {sanitizeProviderError} from './sanitizeProviderError';
@@ -241,6 +245,8 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
   // fakeProvider, which returns canned demo replies that LOOK like
   // real model output and send users on a wild goose chase.
   const hasKeyFile = keyFile !== undefined;
+  const providerIsImageCapable =
+    keyFile === undefined || isImageCapableProvider(keyFile.provider);
 
   // Effective system prompt: prefer the user's persona override
   // when it's a non-empty string, otherwise fall back to the
@@ -297,6 +303,14 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
   // reliable than a messages effect: the layout has actually grown by
   // the time it fires.
   const scrollRef = useRef<ScrollView>(null);
+
+  // B1a — page attachment. `pageCtx` holds the current page capture
+  // for the thumbnail; `attachPage` is the user's explicit opt-in for
+  // FREEFORM messages (off by default). Quick actions ignore it and
+  // always attach. Replaces the old phrase-matching gate — no more
+  // guessing from wording whether the page is sent.
+  const [pageCtx, setPageCtx] = useState<PageContext | null>(null);
+  const [attachPage, setAttachPage] = useState<boolean>(false);
   const [input, setInput] = useState<string>('');
   const [busy, setBusy] = useState<boolean>(false);
   const [fontSize, setFontSize] = useState<FontSize>('S');
@@ -330,6 +344,25 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
   // globally-unique namespace.
   const nextIdRef = useRef<number>(1);
   const newId = () => `${newMessageId()}_${nextIdRef.current++}`;
+
+  // On mount: load the current page capture for the thumbnail. Uses
+  // the stored capture promise (fired at sidebar tap) so the panel
+  // doesn't wait; falls back to null if capture failed or the file
+  // isn't a note/PDF. The thumbnail is display + toggle only — the
+  // actual send re-captures via getFreshPageContext so the image
+  // sent always reflects the page currently on screen.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const ctx = await getPageContext().catch(() => null);
+      if (!cancelled) {
+        setPageCtx(ctx);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // On mount: restore the most-recent conversation if we have wiring
   // + a key file. New chats inherit a fresh id only at first send.
@@ -431,13 +464,13 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
     const ctl = new AbortController();
     const timeoutId = setTimeout(() => ctl.abort(), SEND_TIMEOUT_MS);
     try {
-      // Smart context routing (Req 4): quick actions always attach
-      // the page; freeform input only attaches when the message
-      // looks page-referential (see contextRouting.isPageReferential).
-      // Off-topic freeform questions become a general AI chat —
-      // saves tokens AND respects the user's "I'm asking something
-      // else now" intent.
-      const attachContext = shouldAttachPageContext(source, trimmed);
+      // Context attachment (B1a): quick actions ALWAYS attach the
+      // page (they're actions "on the page"); freeform messages
+      // attach only when the user tapped the page thumbnail
+      // (attachPage). This replaces the old phrase-matching gate —
+      // the user sees and controls exactly what's sent.
+      const attachContext =
+        source === 'quick-action' ? true : attachPage;
       // pageContext is populated as a Promise at sidebar-tap time
       // so the popup can open before screenshot + OCR finishes.
       // Awaiting here absorbs any residual capture latency under the
@@ -533,8 +566,15 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
       clearTimeout(timeoutId);
       release();
       setBusy(false);
+      // Per-message opt-in: turn the page toggle back off after a
+      // freeform send so the next message is a deliberate choice.
+      // (Once B1b replays the image in history, re-attaching would
+      // just duplicate it.) Quick actions never touch this flag.
+      if (source === 'freeform') {
+        setAttachPage(false);
+      }
     }
-  }, [apiKey, client, effectiveSystemPrompt, keyFile, model, persistTurn]);
+  }, [apiKey, attachPage, client, effectiveSystemPrompt, keyFile, model, persistTurn]);
 
   // Single dispatch for any action button (built-in OR user-defined).
   // The id is opaque here — we look up the prompt from the merged
@@ -781,6 +821,46 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
       {/* Quick actions previously sat as a row here. They've moved
           into the empty-state of the chat scroll (see SuggestionCards
           below) so the chat area dominates the panel. */}
+
+      {/* B1a — page attachment thumbnail. Tap to toggle whether the
+          current page is sent with a FREEFORM message (off by
+          default). Quick actions always attach regardless. The label
+          shows file + page; a badge flags text-only providers where
+          the image itself isn't sent (only the transcribed text). */}
+      {pageCtx !== null ? (
+        <TouchableOpacity
+          testID="chat-page-attach"
+          accessibilityLabel={
+            attachPage
+              ? 'Page attached — tap to detach'
+              : 'Attach the current page'
+          }
+          onPress={() => setAttachPage(v => !v)}
+          style={[
+            styles.attachRow,
+            attachPage && styles.attachRowOn,
+          ]}>
+          <Image
+            testID="chat-page-thumb"
+            source={{uri: `data:image/png;base64,${pageCtx.screenshotBase64}`}}
+            style={styles.attachThumb}
+            resizeMode="cover"
+          />
+          <View style={styles.attachTextCol}>
+            <Text style={styles.attachLabel}>
+              {attachPage ? '✓ ' : ''}
+              {pageLabelOf(pageCtx)}
+            </Text>
+            <Text style={styles.attachHint}>
+              {attachPage
+                ? providerIsImageCapable
+                  ? 'sent with your next message'
+                  : 'text only — image not sent to this provider'
+                : 'tap to attach this page'}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      ) : null}
 
       {/* Privacy caution — matches README: vision providers send the
           screenshot as-is; DeepSeek is text-only so outbound text is
@@ -1081,6 +1161,15 @@ function ChatBubble({
   );
 }
 
+// Short "file p.N" label for the attach thumbnail. Strips directory
+// and .note/.pdf extension from the path so only the notebook name
+// shows next to the page number.
+const pageLabelOf = (ctx: PageContext): string => {
+  const base = ctx.notePath.split('/').pop() ?? ctx.notePath;
+  const name = base.replace(/\.(note|pdf)$/i, '');
+  return `${name} · p.${ctx.page}`;
+};
+
 const styles = StyleSheet.create({
   root: {
     flex: 1,
@@ -1181,6 +1270,39 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '700',
     color: '#000000',
+  },
+  attachRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#cccccc',
+    marginBottom: 6,
+  },
+  attachRowOn: {
+    borderColor: '#000000',
+    borderWidth: 2,
+  },
+  attachThumb: {
+    width: 48,
+    height: 64,
+    borderWidth: 1,
+    borderColor: '#000000',
+    backgroundColor: '#ffffff',
+  },
+  attachTextCol: {
+    flex: 1,
+  },
+  attachLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#000000',
+  },
+  attachHint: {
+    fontSize: 11,
+    color: '#555555',
   },
   privacyNote: {
     fontSize: 13,

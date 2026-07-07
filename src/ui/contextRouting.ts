@@ -62,6 +62,11 @@ export const isPageReferential = (rawText: string): boolean => {
 // isPageReferential to decide.
 export type SendSource = 'quick-action' | 'freeform';
 
+// DEPRECATED (B1a): no longer the attachment gate. ChatView now
+// attaches the page via the explicit thumbnail toggle for freeform
+// messages (quick actions always attach). Kept as a pure, tested
+// helper in case a future heuristic wants it, but it is not wired
+// into the send path anymore.
 export const shouldAttachPageContext = (
   source: SendSource,
   text: string,
