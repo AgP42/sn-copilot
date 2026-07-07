@@ -23,6 +23,7 @@ import {readCustomActions} from '../storage/customActionsFile';
 import {readPersona} from '../storage/personaFile';
 import {setHasSeenSettings} from '../storage/prefs';
 import {useCopilotState} from '../storage/useCopilotState';
+import {uncoveredPlaintextFiles} from '../storage/appState';
 import {
   lockNow as lockNowFlow,
   mergeIntoVault,
@@ -238,14 +239,33 @@ function CopilotPanelInner(props: InnerProps): React.JSX.Element {
       }
       // ok — but if state was 'merge' (plaintext present alongside the
       // vault), fold the new key files into the vault under the same
-      // PIN so we don't loop on the unlock screen.
+      // PIN so we don't loop on the unlock screen. Entries the vault
+      // already contains are skipped — when everything is covered
+      // (the user kept the .txt after encrypting, a supported path)
+      // there is nothing to merge and no reason to pay a second
+      // PBKDF2 round rewriting the vault.
       if (state !== null && state.kind === 'merge') {
-        await mergeIntoVault(
-          {vault: bundle.vaultDeps, prefs: bundle.prefsDeps},
-          secret,
-          r.files,
+        const uncovered = uncoveredPlaintextFiles(
           state.plaintextFiles,
+          r.files,
         );
+        if (uncovered.length > 0) {
+          const m = await mergeIntoVault(
+            {vault: bundle.vaultDeps, prefs: bundle.prefsDeps},
+            secret,
+            r.files,
+            uncovered,
+          );
+          // A silent merge failure used to leave the state machine on
+          // 'merge' → unlock screen again → "my PIN doesn't work"
+          // with a PIN that was correct all along. Surface it.
+          if (!m.ok) {
+            return {
+              kind: 'corrupt' as const,
+              reason: `unlocked, but merging the plaintext key file failed: ${m.reason}`,
+            };
+          }
+        }
         await refresh();
       }
       return {kind: 'ok' as const};
@@ -305,7 +325,11 @@ function CopilotPanelInner(props: InnerProps): React.JSX.Element {
   // there's nothing actionable in settings until unlock.
   if (state !== null && (state.kind === 'locked' || state.kind === 'merge')) {
     return (
-      <UnlockScreen onAttempt={onUnlockAttempt} onReset={onUnlockReset} />
+      <UnlockScreen
+        onAttempt={onUnlockAttempt}
+        onReset={onUnlockReset}
+        onClose={closeOverlay}
+      />
     );
   }
 
