@@ -275,3 +275,16 @@ et Cancel non plus → user piégé, doit désinstaller/redémarrer. Fond OK.
   est inacceptable ; au minimum, un bouton de fermeture d'urgence
   toujours réactif (mais si le tactile entier est mort, inutile...).
   Vraie mitigation = ne pas dépendre de l'IME système.
+
+## DÉCISION (2026-07-07) : chiffrement DÉPRIORISÉ
+Après 3 bugs successifs (T18 boucle unlock, T24 gel A5X gen-1, lock-on-
+close absent), l'utilisateur décide de laisser tomber le chiffrement et
+de se concentrer sur le fonctionnel utile. Conséquences :
+- A8 (fix boucle unlock) reste CODÉ et testé mais N'EST PAS envoyé en PR
+  upstream pour l'instant (pas prioritaire ; le comportement lock-on-
+  close le rendrait de toute façon incohérent sans le fix associé).
+- Ne plus investir sur T24 (pavé PIN custom) ni sur le lock-on-close.
+- Le mode PLAINTEXT reste le mode d'usage réel → l'édition modèle /
+  max_tokens en plaintext (A4/A3) est ce qui compte, pas le vault.
+- Focus roadmap : T-CTX (contexte/images/multi-fichiers) = LA feature
+  demandée, puis T22/T23 (petits gains visibles).
