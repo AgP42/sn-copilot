@@ -49,6 +49,7 @@ import {
 import {getActiveKeys} from '../storage/sessionKey';
 import {serializeKeyFile} from '../storage/keyFiles';
 import {catalogFor} from './modelCatalog';
+import {sanitizeProviderError} from './sanitizeProviderError';
 import {encodeUtf8} from '../sdk/utf8';
 import {
   CHAT_MAX_TOKENS_MAX,
@@ -240,7 +241,9 @@ function SettingsViewBody(props: {
       if (!mountedRef.current) {
         return;
       }
-      const msg = (e as Error).message;
+      // Same actionable summary as the chat surface: a 404 points at
+      // the model id, 401/403 at the key file.
+      const msg = sanitizeProviderError(e);
       setTestStatus({kind: 'error', message: msg});
       console.log(
         `[COPILOT_SETTINGS] test connection failed elapsedMs=${Date.now() - start} err=${msg}`,
@@ -811,30 +814,6 @@ function EditableModelRow({
 
   return (
     <View>
-      {presets.length > 0 ? (
-        <View testID="settings-model-presets" style={styles.presetWrap}>
-          {presets.map(m => {
-            const selected = draft.trim() === m.id;
-            return (
-              <TouchableOpacity
-                key={m.id}
-                testID={`settings-model-preset-${m.id}`}
-                accessibilityLabel={`Use model ${m.id}`}
-                onPress={() => setDraft(m.id)}
-                style={[styles.presetChip, selected && styles.presetChipOn]}>
-                <Text
-                  style={[
-                    styles.presetChipText,
-                    selected && styles.presetChipTextOn,
-                  ]}>
-                  {m.label}
-                  {m.note ? ` · ${m.note}` : ''}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      ) : null}
       <View style={styles.fieldRow}>
         <Text style={styles.fieldLabel}>Model</Text>
         <TextInput
@@ -865,6 +844,30 @@ function EditableModelRow({
           </Text>
         </TouchableOpacity>
       </View>
+      {presets.length > 0 ? (
+        <View testID="settings-model-presets" style={styles.presetWrap}>
+          {presets.map(m => {
+            const selected = draft.trim() === m.id;
+            return (
+              <TouchableOpacity
+                key={m.id}
+                testID={`settings-model-preset-${m.id}`}
+                accessibilityLabel={`Use model ${m.id}`}
+                onPress={() => setDraft(m.id)}
+                style={[styles.presetChip, selected && styles.presetChipOn]}>
+                <Text
+                  style={[
+                    styles.presetChipText,
+                    selected && styles.presetChipTextOn,
+                  ]}>
+                  {m.label}
+                  {m.note ? ` · ${m.note}` : ''}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ) : null}
       {saveState.kind === 'error' ? (
         <Text testID="settings-model-error" style={styles.modelError}>
           Could not save model: {saveState.reason}
@@ -908,29 +911,32 @@ function EditableMaxTokensRow({
     setSaveState(r.ok ? {kind: 'idle'} : {kind: 'error', reason: r.reason});
   };
 
+  const presetRow = (
+    <View style={styles.presetWrap}>
+      {MAX_TOKENS_PRESETS.map(n => {
+        const selected = normalized === String(n);
+        return (
+          <TouchableOpacity
+            key={n}
+            testID={`settings-maxtokens-preset-${n}`}
+            accessibilityLabel={`Set reply cap to ${n} tokens`}
+            onPress={() => setDraft(String(n))}
+            style={[styles.presetChip, selected && styles.presetChipOn]}>
+            <Text
+              style={[
+                styles.presetChipText,
+                selected && styles.presetChipTextOn,
+              ]}>
+              {n}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+
   return (
     <View>
-      <View style={styles.presetWrap}>
-        {MAX_TOKENS_PRESETS.map(n => {
-          const selected = normalized === String(n);
-          return (
-            <TouchableOpacity
-              key={n}
-              testID={`settings-maxtokens-preset-${n}`}
-              accessibilityLabel={`Set reply cap to ${n} tokens`}
-              onPress={() => setDraft(String(n))}
-              style={[styles.presetChip, selected && styles.presetChipOn]}>
-              <Text
-                style={[
-                  styles.presetChipText,
-                  selected && styles.presetChipTextOn,
-                ]}>
-                {n}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
       <View style={styles.fieldRow}>
         <Text style={styles.fieldLabel}>Reply cap</Text>
         <TextInput
@@ -963,6 +969,7 @@ function EditableMaxTokensRow({
           </Text>
         </TouchableOpacity>
       </View>
+      {presetRow}
       {saveState.kind === 'error' ? (
         <Text testID="settings-maxtokens-error" style={styles.modelError}>
           Could not save reply cap: {saveState.reason}
