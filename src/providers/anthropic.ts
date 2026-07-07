@@ -53,18 +53,26 @@ export const createAnthropicClient = (
       });
     }
     content.push({type: 'text', text: req.userText});
+    // Prior turns first (normalised upstream: starts with 'user',
+    // alternating, non-empty — the shape this API enforces), then the
+    // current user message.
+    const history = (req.history ?? []).map(t => ({
+      role: t.role,
+      content: t.text,
+    }));
     const body = {
       model: opts.model,
       max_tokens: req.maxTokens,
       system: req.systemPrompt,
-      messages: [{role: 'user', content}],
+      messages: [...history, {role: 'user', content}],
       // Top-level auto-caching: the API places a cache breakpoint on
       // the last cacheable block. The stable request prefix (system
-      // prompt + page image, which precedes the user text) is then
-      // billed at ~10% of the input rate on subsequent sends in a
-      // session instead of full price. Below the model's minimum
-      // cacheable size this is silently a no-op — never an error —
-      // so it is safe to send unconditionally.
+      // prompt + replayed history + page image, which all precede the
+      // new user text) is then billed at ~10% of the input rate on
+      // subsequent sends instead of full price — the longer the
+      // conversation, the bigger the saving. Below the model's minimum
+      // cacheable size this is silently a no-op — never an error — so
+      // it is safe to send unconditionally.
       cache_control: {type: 'ephemeral'},
     };
     const res = await fetchFn(ENDPOINT, {

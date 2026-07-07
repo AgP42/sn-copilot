@@ -584,3 +584,125 @@ describe('createProviderClient — registry', () => {
     },
   );
 });
+
+describe('multi-turn history mapping', () => {
+  const HISTORY = [
+    {role: 'user' as const, text: 'Summarize this page'},
+    {role: 'assistant' as const, text: '• point one\n• point two'},
+  ];
+
+  const okAnthropic = () =>
+    buildOk({
+      content: [{type: 'text', text: 'ok'}],
+      usage: {input_tokens: 1, output_tokens: 1},
+    });
+
+  const okChatCompletions = () =>
+    buildOk({
+      choices: [{message: {content: 'ok'}}],
+      usage: {prompt_tokens: 1, completion_tokens: 1},
+    });
+
+  it('anthropic: prior turns precede the current user message', async () => {
+    const fetchFn: FetchSpy = jest.fn().mockResolvedValue(okAnthropic());
+    const client = createAnthropicClient(fetchFn as unknown as typeof fetch);
+    await client.send(
+      {...baseReq(), history: HISTORY},
+      {apiKey: 'k', model: 'm'},
+    );
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body as string);
+    expect(body.messages).toHaveLength(3);
+    expect(body.messages[0]).toEqual({
+      role: 'user',
+      content: 'Summarize this page',
+    });
+    expect(body.messages[1]).toEqual({
+      role: 'assistant',
+      content: '• point one\n• point two',
+    });
+    // Current message keeps the typed-blocks shape.
+    expect(body.messages[2].role).toBe('user');
+    expect(body.messages[2].content).toEqual([{type: 'text', text: 'Hello'}]);
+  });
+
+  it('openai: history slots between system and the current message', async () => {
+    const fetchFn: FetchSpy = jest.fn().mockResolvedValue(okChatCompletions());
+    const client = createOpenAIClient(fetchFn as unknown as typeof fetch);
+    await client.send(
+      {...baseReq(), history: HISTORY},
+      {apiKey: 'k', model: 'gpt-4o-mini'},
+    );
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body as string);
+    expect(body.messages.map((m: {role: string}) => m.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+    ]);
+    expect(body.messages[1].content).toBe('Summarize this page');
+    expect(body.messages[3].content).toBe('Hello');
+  });
+
+  it("gemini: assistant turns map to the 'model' role", async () => {
+    const fetchFn: FetchSpy = jest.fn().mockResolvedValue(
+      buildOk({
+        candidates: [{content: {parts: [{text: 'ok'}]}}],
+        usageMetadata: {promptTokenCount: 1, candidatesTokenCount: 1},
+      }),
+    );
+    const client = createGeminiClient(fetchFn as unknown as typeof fetch);
+    await client.send(
+      {...baseReq(), history: HISTORY},
+      {apiKey: 'k', model: 'gemini-2.5-flash'},
+    );
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body as string);
+    expect(body.contents).toHaveLength(3);
+    expect(body.contents[0]).toEqual({
+      role: 'user',
+      parts: [{text: 'Summarize this page'}],
+    });
+    expect(body.contents[1]).toEqual({
+      role: 'model',
+      parts: [{text: '• point one\n• point two'}],
+    });
+    expect(body.contents[2].role).toBe('user');
+  });
+
+  it('deepseek: history slots between system and the current message', async () => {
+    const fetchFn: FetchSpy = jest.fn().mockResolvedValue(okChatCompletions());
+    const client = createDeepSeekClient(fetchFn as unknown as typeof fetch);
+    await client.send(
+      {...baseReq(), history: HISTORY},
+      {apiKey: 'k', model: 'deepseek-chat'},
+    );
+    const body = JSON.parse(fetchFn.mock.calls[0][1].body as string);
+    expect(body.messages.map((m: {role: string}) => m.role)).toEqual([
+      'system',
+      'user',
+      'assistant',
+      'user',
+    ]);
+  });
+
+  it('omitted history keeps the single-turn shape', async () => {
+    // Anthropic (no system message in messages[]) → 1 entry; the
+    // chat-completions family (openai/deepseek) → 2 (system + user).
+    const anthropicFetch: FetchSpy = jest.fn().mockResolvedValue(okAnthropic());
+    const anthropic = createAnthropicClient(
+      anthropicFetch as unknown as typeof fetch,
+    );
+    await anthropic.send(baseReq(), {apiKey: 'k', model: 'm'});
+    expect(
+      JSON.parse(anthropicFetch.mock.calls[0][1].body as string).messages,
+    ).toHaveLength(1);
+
+    const openaiFetch: FetchSpy = jest
+      .fn()
+      .mockResolvedValue(okChatCompletions());
+    const openai = createOpenAIClient(openaiFetch as unknown as typeof fetch);
+    await openai.send(baseReq(), {apiKey: 'k', model: 'gpt-4o-mini'});
+    expect(
+      JSON.parse(openaiFetch.mock.calls[0][1].body as string).messages,
+    ).toHaveLength(2);
+  });
+});

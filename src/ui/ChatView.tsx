@@ -59,6 +59,7 @@ import {
   type ConversationsDeps,
 } from '../storage/conversations';
 import {composeUserText} from '../scope/composePrompt';
+import {buildProviderHistory} from './providerHistory';
 import {shouldAttachPageContext, type SendSource} from './contextRouting';
 import {buildMarkdownStyles} from './markdownStyles';
 import {markdownToPlainText} from './markdownToPlain';
@@ -279,6 +280,14 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
   }, [customActions, onStartDrill]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Live mirror of `messages` for non-reactive readers. sendUserMessage
+  // is memoized without `messages` in its deps (adding it would
+  // recreate the callback on every turn); reading through the ref
+  // gives it the current list without widening the dep array.
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const [input, setInput] = useState<string>('');
   const [busy, setBusy] = useState<boolean>(false);
   const [fontSize, setFontSize] = useState<FontSize>('S');
@@ -398,6 +407,11 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
       console.log('[COPILOT_CHAT] action ignored — already in flight');
       return;
     }
+    // Snapshot the prior turns BEFORE appending the new user message —
+    // the current text travels as `userText`, and snapshotting after
+    // the append would double it into the replayed history once the
+    // re-render lands (there are awaits below).
+    const priorTurns = buildProviderHistory(messagesRef.current);
     const userMsg: ChatMessage = {id: newId(), role: 'user', text: trimmed};
     const thinkingMsg: ChatMessage = {id: newId(), role: 'thinking'};
     setMessages(curr => [...curr, userMsg, thinkingMsg]);
@@ -433,6 +447,14 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
         keyFile === undefined || isImageCapableProvider(keyFile.provider);
       const userText = allowImage ? composed : redactPii(composed);
       const imageBase64 = allowImage ? ctx?.screenshotBase64 : undefined;
+      // Replay of the prior turns (snapshotted before the append
+      // above) so follow-ups keep their context. Text-only; on the
+      // DeepSeek path each replayed turn is scrubbed the same way as
+      // the current one (message texts were stored for display,
+      // never redacted at store time).
+      const wireTurns = allowImage
+        ? priorTurns
+        : priorTurns.map(t => ({...t, text: redactPii(t.text)}));
       infoLog(
         '[COPILOT_CHAT] send ' +
           `provider=${keyFile?.provider ?? 'fake'} ` +
@@ -440,6 +462,7 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
           `allowImage=${allowImage} ` +
           `imageAttached=${imageBase64 !== undefined} ` +
           `userText.length=${userText.length} ` +
+          `history.turns=${wireTurns.length} ` +
           `pageText.length=${ctx?.pageText.length ?? 0}`,
       );
       const r = await client.send(
@@ -447,6 +470,7 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
           systemPrompt: effectiveSystemPrompt,
           userText,
           imageBase64,
+          history: wireTurns,
           maxTokens: 256,
           signal: ctl.signal,
         },
