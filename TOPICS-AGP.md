@@ -342,3 +342,9 @@ plafond. Pour rallonger : prompt ("réponds en détail") ou system prompt.
 Piste UX : la ligne "Reply cap" pourrait être renommée/clarifiée, ou un
 préréglage de style de réponse (bref/normal/détaillé) plus parlant que
 des tokens. Nice-to-have.
+
+### Ménage roadmap (2026-07-07)
+- T9 (patterns FR) : RETIRÉ de la roadmap. Pansement déjà livré dans le
+  fork, inoffensif, sera rendu caduc par T-CTX (qui supprime la regex
+  comme condition d'attachement). Ne pas le compter comme feature.
+- A7 = T7 (buildPlugin.sh fail-fast) confirmé comme candidat upstream S.
