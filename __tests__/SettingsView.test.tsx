@@ -212,13 +212,54 @@ describe('SettingsView — discovery: one valid key file', () => {
     });
   });
 
+  it('edits the model in plaintext mode by rewriting the .txt', async () => {
+    // Discovery must resolve twice: initial mount + the refresh after
+    // the save. Same single-file fixture both times.
+    mockListFiles.mockResolvedValueOnce([
+      fileEntry(
+        '/storage/emulated/0/MyStyle/SnCopilot/copilot-key-anthropic.txt',
+      ),
+    ]);
+    const {tree} = renderSettings();
+    await act(async () => {
+      await flushPromises();
+    });
+    const input = findByTestID(tree, 'settings-model-input');
+    expect(input.props.value).toBe('claude-haiku-4-5');
+    act(() => {
+      input.props.onChangeText('claude-opus-4-8');
+    });
+    await act(async () => {
+      findByTestID(tree, 'settings-model-save').props.onPress();
+      await flushPromises();
+    });
+    expect(maybeFindByTestID(tree, 'settings-model-error')).toBeNull();
+    // The .txt was regenerated at its source path with the new model.
+    const overlay = jest.requireMock('../src/native/CopilotOverlay').default;
+    const call = (overlay.writeFileBase64 as jest.Mock).mock.calls.find(
+      (c: string[]) => c[0].includes('copilot-key-anthropic.txt'),
+    );
+    expect(call).toBeDefined();
+    const written = Buffer.from(call![1], 'base64').toString('utf8');
+    expect(written).toContain('model=claude-opus-4-8');
+    expect(written).toContain('key=sk-ant-test123');
+  });
+
   it('shows active provider/model/masked-key/source', async () => {
     const {tree} = renderSettings();
     await act(async () => {
       await flushPromises();
     });
     expect(findByTestID(tree, 'settings-resolution-ok')).toBeDefined();
-    expect(textOf(tree, 'settings-active-model')).toBe('claude-haiku-4-5');
+    // Plaintext mode now renders the model as an inline editor (input
+    // + Save) instead of a read-only Text — the value rides on the
+    // input's `value` prop.
+    expect(maybeFindByTestID(tree, 'settings-active-model')).toBeNull();
+    expect(findByTestID(tree, 'settings-model-input').props.value).toBe(
+      'claude-haiku-4-5',
+    );
+    // The active reply cap is surfaced for observability (default here).
+    expect(textOf(tree, 'settings-active-maxtokens')).toContain('256');
     // Key is masked: first 7 chars + bullets + ellipsis. NOT raw.
     expect(textOf(tree, 'settings-active-key')).not.toContain('sk-ant-test123');
     expect(textOf(tree, 'settings-active-key')).toContain('sk-ant-');

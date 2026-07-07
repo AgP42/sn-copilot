@@ -30,9 +30,21 @@ export type KeyFile = {
   defaultProvider?: ProviderId;
   // Per-action override of the default PII redaction policy. text-only.
   clarifyRedact?: boolean;
+  // Chat reply token cap, from an optional `max_tokens=` line.
+  // Undefined → DEFAULT_CHAT_MAX_TOKENS. Applies to the chat send
+  // only; the Grill pipeline keeps its own per-task caps.
+  maxTokens?: number;
   // Source path on disk; shown in Settings as "Managed by …".
   sourcePath: string;
 };
+
+// Chat reply token cap when the key file doesn't override it. The
+// bounds keep a typo'd `max_tokens=` from producing a one-token or a
+// budget-detonating request — out-of-range values are warned about
+// and ignored at parse time.
+export const DEFAULT_CHAT_MAX_TOKENS = 256;
+export const CHAT_MAX_TOKENS_MIN = 16;
+export const CHAT_MAX_TOKENS_MAX = 8192;
 
 // Single source of truth for "does this provider's API accept image
 // inputs?". Used by the chat send path to decide whether to attach

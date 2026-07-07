@@ -348,6 +348,52 @@ describe('SettingsView — encrypted+unlocked actions', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('model becomes editable when unlocked; save rewrites the vault', async () => {
+    const {tree} = await setupEncryptedAndUnlock();
+    // Unlocked → the read-only model text is replaced by an input.
+    expect(maybeFindByTestID(tree, 'settings-active-model')).toBeNull();
+    const input = findByTestID(tree, 'settings-model-input');
+    expect(input.props.value).toBe('claude-haiku-4-5');
+    // Unchanged draft → save disabled.
+    expect(findByTestID(tree, 'settings-model-save').props.disabled).toBe(true);
+
+    act(() => {
+      input.props.onChangeText('claude-opus-4-8');
+    });
+    expect(findByTestID(tree, 'settings-model-save').props.disabled).toBe(
+      false,
+    );
+    await act(async () => {
+      findByTestID(tree, 'settings-model-save').props.onPress();
+      await flushPromises();
+    });
+
+    // No inline error, and after the refresh the row reflects the
+    // committed value (draft re-synced from the vault contents).
+    expect(maybeFindByTestID(tree, 'settings-model-error')).toBeNull();
+    expect(findByTestID(tree, 'settings-model-input').props.value).toBe(
+      'claude-opus-4-8',
+    );
+    // The vault file on the fake fs was rewritten (tmp committed).
+    expect(fs.get(VAULT_PATH)).toBeDefined();
+  });
+
+  it('model save failure surfaces the reason inline', async () => {
+    const {tree} = await setupEncryptedAndUnlock();
+    // Simulate the vault vanishing (e.g. reset from another surface)
+    // between unlock and save.
+    fs.delete(VAULT_PATH);
+    const input = findByTestID(tree, 'settings-model-input');
+    act(() => {
+      input.props.onChangeText('claude-opus-4-8');
+    });
+    await act(async () => {
+      findByTestID(tree, 'settings-model-save').props.onPress();
+      await flushPromises();
+    });
+    expect(findByTestID(tree, 'settings-model-error')).toBeDefined();
+  });
+
   it('Change PIN flow updates the vault key', async () => {
     const {tree} = await setupEncryptedAndUnlock();
     openEncryptionScreen(tree);
@@ -491,7 +537,7 @@ describe('SettingsView — disable encryption with optional fields', () => {
     expect(new TextDecoder().decode(written!)).toContain('clarify_redact=off');
   });
 
-  it('preserves default_provider and clarify_redact in the written .txt', async () => {
+  it('preserves default_provider, clarify_redact and max_tokens in the written .txt', async () => {
     // Seed a .txt with the optional fields present.
     fs.set(
       TXT_PATH,
@@ -500,7 +546,8 @@ describe('SettingsView — disable encryption with optional fields', () => {
           'model=claude-haiku-4-5\n' +
           'key=sk-ant-x\n' +
           'default_provider=anthropic\n' +
-          'clarify_redact=on\n',
+          'clarify_redact=on\n' +
+          'max_tokens=1024\n',
       ),
     );
     const {tree} = renderSettings();
@@ -536,5 +583,6 @@ describe('SettingsView — disable encryption with optional fields', () => {
     const text = new TextDecoder().decode(written!);
     expect(text).toContain('default_provider=anthropic');
     expect(text).toContain('clarify_redact=on');
+    expect(text).toContain('max_tokens=1024');
   });
 });

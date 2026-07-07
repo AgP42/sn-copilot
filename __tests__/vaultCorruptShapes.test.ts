@@ -42,7 +42,7 @@ const seedEncryptedPayload = async (
   const io = createInMemoryFileIo();
   const salt = randomBytes(SALT_LENGTH_BYTES);
   const key = await deriveKey('123456', salt, DEFAULT_KDF_PARAMS);
-  const ct = encrypt(key, utf8.encode(payloadJson));
+  const ct = await encrypt(key, utf8.encode(payloadJson));
   io.fs.set(
     VAULT_PATH,
     utf8.encode(
@@ -86,6 +86,18 @@ describe('vault — inner KeyFile validation branches', () => {
     [
       'sourcePath not string',
       {provider: 'anthropic', model: 'm', key: 'k', sourcePath: 7},
+    ],
+    [
+      'maxTokens not a number',
+      {provider: 'anthropic', model: 'm', key: 'k', sourcePath: '/x', maxTokens: 'big'},
+    ],
+    [
+      'maxTokens not an integer',
+      {provider: 'anthropic', model: 'm', key: 'k', sourcePath: '/x', maxTokens: 1.5},
+    ],
+    [
+      'maxTokens zero',
+      {provider: 'anthropic', model: 'm', key: 'k', sourcePath: '/x', maxTokens: 0},
     ],
     ['inner item is null', null],
     ['inner item is a string', 'not-an-object'],
@@ -144,6 +156,25 @@ describe('vault — inner KeyFile validation branches', () => {
     expect(r.kind).toBe('corrupt');
     if (r.kind === 'corrupt') {
       expect(r.reason).toContain('aes-gcm');
+    }
+  });
+
+  it('round-trips the optional maxTokens field', async () => {
+    const io = createInMemoryFileIo();
+    const files: KeyFile[] = [
+      {
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        key: 'sk-x',
+        sourcePath: '/x',
+        maxTokens: 1024,
+      },
+    ];
+    await writeVault({io, vaultPath: VAULT_PATH}, '123456', files);
+    const r = await readVault({io, vaultPath: VAULT_PATH}, '123456');
+    expect(r.kind).toBe('ok');
+    if (r.kind === 'ok') {
+      expect(r.files[0].maxTokens).toBe(1024);
     }
   });
 

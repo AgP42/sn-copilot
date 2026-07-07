@@ -24,6 +24,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -39,6 +40,7 @@ import {readPersona, writePersona} from '../storage/personaFile';
 import {setEncryptionMode, setIdleTimeoutMin} from '../storage/prefs';
 import * as idleTimer from '../storage/idleTimer';
 import {
+  changeModel,
   changePin,
   disableEncryption,
   encryptInitial,
@@ -46,12 +48,14 @@ import {
   resetVault,
 } from '../storage/secureFlows';
 import {getActiveKeys} from '../storage/sessionKey';
+import {serializeKeyFile} from '../storage/keyFiles';
 import {encodeUtf8} from '../sdk/utf8';
-import type {
-  CustomAction,
-  KeyFile,
-  ProviderId,
-  ProviderResolution,
+import {
+  DEFAULT_CHAT_MAX_TOKENS,
+  type CustomAction,
+  type KeyFile,
+  type ProviderId,
+  type ProviderResolution,
 } from '../types';
 // (CustomAction stays imported for the read-only display below.)
 import CustomActionsSettings from './CustomActionsSettings';
@@ -327,19 +331,8 @@ function SettingsViewBody(props: {
     // Write-back: re-create one .txt per provider in MyStyle/SnCopilot/.
     const writeBack = async (files: KeyFile[]): Promise<void> => {
       for (const f of files) {
-        const lines = [
-          `provider=${f.provider}`,
-          `model=${f.model}`,
-          `key=${f.key}`,
-        ];
-        if (f.defaultProvider !== undefined) {
-          lines.push(`default_provider=${f.defaultProvider}`);
-        }
-        if (f.clarifyRedact !== undefined) {
-          lines.push(`clarify_redact=${f.clarifyRedact ? 'on' : 'off'}`);
-        }
         const path = `/storage/emulated/0/MyStyle/SnCopilot/copilot-key-${f.provider}.txt`;
-        await bundle.io.writeBytes(path, encodeUtf8(lines.join('\n') + '\n'));
+        await bundle.io.writeBytes(path, encodeUtf8(serializeKeyFile(f)));
       }
     };
     await disableEncryption(
@@ -359,6 +352,56 @@ function SettingsViewBody(props: {
     setSubFlow({kind: 'idle'});
     await refresh();
   }, [bundle.prefsDeps, bundle.vaultDeps, refresh]);
+
+  // Model edit, both storage modes. Encrypted+unlocked → rewrite the
+  // vault with the cached derived key (changeModel flow). Plaintext /
+  // migrate → regenerate the .txt at its source path; comments in the
+  // user's file are not preserved (serializeKeyFile is the canonical
+  // form the parser reads back).
+  const onChangeModel = useCallback(
+    async (
+      provider: ProviderId,
+      newModel: string,
+    ): Promise<{ok: true} | {ok: false; reason: string}> => {
+      const trimmed = newModel.trim();
+      if (trimmed.length === 0) {
+        return {ok: false, reason: 'model must not be empty'};
+      }
+      if (state !== null && state.kind === 'unlocked') {
+        const r = await changeModel(
+          {vault: bundle.vaultDeps, prefs: bundle.prefsDeps},
+          provider,
+          trimmed,
+        );
+        if (!r.ok) {
+          return {ok: false, reason: r.reason};
+        }
+        await refresh();
+        return {ok: true};
+      }
+      if (
+        state !== null &&
+        (state.kind === 'plaintext' || state.kind === 'migrate')
+      ) {
+        const target = state.files.find(f => f.provider === provider);
+        if (target === undefined) {
+          return {ok: false, reason: `no key file for provider "${provider}"`};
+        }
+        try {
+          await bundle.io.writeBytes(
+            target.sourcePath,
+            encodeUtf8(serializeKeyFile({...target, model: trimmed})),
+          );
+        } catch (e) {
+          return {ok: false, reason: (e as Error).message};
+        }
+        await refresh();
+        return {ok: true};
+      }
+      return {ok: false, reason: 'no editable key store in this state'};
+    },
+    [bundle.io, bundle.prefsDeps, bundle.vaultDeps, refresh, state],
+  );
 
   const onIdleTimeoutChange = useCallback(
     async (minutes: number) => {
@@ -540,7 +583,17 @@ function SettingsViewBody(props: {
           </Text>
         ) : null}
         {resolution !== null ? (
-          <KeyFileBlock resolution={resolution} />
+          <KeyFileBlock
+            resolution={resolution}
+            onChangeModel={
+              state !== null &&
+              (state.kind === 'unlocked' ||
+                state.kind === 'plaintext' ||
+                state.kind === 'migrate')
+                ? onChangeModel
+                : undefined
+            }
+          />
         ) : null}
         {errors.length > 0 ? (
           <View testID="settings-errors" style={styles.errorBlock}>
@@ -648,10 +701,21 @@ function CleanupPrompt(props: {
   );
 }
 
+// onChangeModel present ⇔ the vault is encrypted AND unlocked — the
+// only state where editing in Settings is the right surface (the
+// plaintext .txt stays user-managed, and a locked vault can't be
+// rewritten).
+type ChangeModelFn = (
+  provider: ProviderId,
+  newModel: string,
+) => Promise<{ok: true} | {ok: false; reason: string}>;
+
 function KeyFileBlock({
   resolution,
+  onChangeModel,
 }: {
   resolution: ProviderResolution;
+  onChangeModel?: ChangeModelFn;
 }): React.JSX.Element {
   if (resolution.kind === 'none') {
     return (
@@ -673,22 +737,121 @@ function KeyFileBlock({
       </View>
     );
   }
-  return <ActiveProviderBlock active={resolution.active} />;
+  return (
+    <ActiveProviderBlock
+      active={resolution.active}
+      onChangeModel={onChangeModel}
+    />
+  );
 }
 
-function ActiveProviderBlock({active}: {active: KeyFile}): React.JSX.Element {
+// Model row in edit mode (encrypted + unlocked only). Save is
+// disabled while the value is unchanged or empty; failures surface
+// inline (the vault rewrite can fail — e.g. locked out from under us
+// by the idle timer — and the user needs to see why).
+function EditableModelRow({
+  active,
+  onChangeModel,
+}: {
+  active: KeyFile;
+  onChangeModel: ChangeModelFn;
+}): React.JSX.Element {
+  const [draft, setDraft] = useState<string>(active.model);
+  const [saveState, setSaveState] = useState<
+    {kind: 'idle'} | {kind: 'saving'} | {kind: 'error'; reason: string}
+  >({kind: 'idle'});
+
+  // Re-sync the draft when the underlying entry changes (refresh
+  // after save, provider switch).
+  useEffect(() => {
+    setDraft(active.model);
+    setSaveState({kind: 'idle'});
+  }, [active.provider, active.model]);
+
+  const dirty = draft.trim().length > 0 && draft.trim() !== active.model;
+
+  const onSave = async (): Promise<void> => {
+    setSaveState({kind: 'saving'});
+    const r = await onChangeModel(active.provider, draft);
+    if (r.ok) {
+      setSaveState({kind: 'idle'});
+    } else {
+      setSaveState({kind: 'error', reason: r.reason});
+    }
+  };
+
+  return (
+    <View>
+      <View style={styles.fieldRow}>
+        <Text style={styles.fieldLabel}>Model</Text>
+        <TextInput
+          testID="settings-model-input"
+          accessibilityLabel="Model id"
+          style={[styles.fieldValue, styles.mono, styles.modelInput]}
+          value={draft}
+          onChangeText={setDraft}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <TouchableOpacity
+          testID="settings-model-save"
+          accessibilityLabel="Save model id"
+          disabled={!dirty || saveState.kind === 'saving'}
+          onPress={onSave}
+          style={[
+            styles.modelSaveBtn,
+            (!dirty || saveState.kind === 'saving') && styles.modelSaveBtnOff,
+          ]}>
+          <Text
+            style={[
+              styles.modelSaveBtnText,
+              (!dirty || saveState.kind === 'saving') &&
+                styles.modelSaveBtnTextOff,
+            ]}>
+            {saveState.kind === 'saving' ? '…' : 'Save'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+      {saveState.kind === 'error' ? (
+        <Text testID="settings-model-error" style={styles.modelError}>
+          Could not save model: {saveState.reason}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function ActiveProviderBlock({
+  active,
+  onChangeModel,
+}: {
+  active: KeyFile;
+  onChangeModel?: ChangeModelFn;
+}): React.JSX.Element {
   return (
     <View testID="settings-resolution-ok" style={styles.activeBlock}>
       <View style={styles.fieldRow}>
         <Text style={styles.fieldLabel}>Provider</Text>
         <Text style={styles.fieldValue}>{PROVIDER_LABEL[active.provider]}</Text>
       </View>
+      {onChangeModel === undefined ? (
+        <View style={styles.fieldRow}>
+          <Text style={styles.fieldLabel}>Model</Text>
+          <Text
+            testID="settings-active-model"
+            style={[styles.fieldValue, styles.mono]}>
+            {active.model}
+          </Text>
+        </View>
+      ) : (
+        <EditableModelRow active={active} onChangeModel={onChangeModel} />
+      )}
       <View style={styles.fieldRow}>
-        <Text style={styles.fieldLabel}>Model</Text>
-        <Text
-          testID="settings-active-model"
-          style={[styles.fieldValue, styles.mono]}>
-          {active.model}
+        <Text style={styles.fieldLabel}>Reply cap</Text>
+        <Text testID="settings-active-maxtokens" style={styles.fieldValue}>
+          {active.maxTokens !== undefined
+            ? `${active.maxTokens} tokens (max_tokens=)`
+            : `${DEFAULT_CHAT_MAX_TOKENS} tokens (default)`}
         </Text>
       </View>
       <View style={styles.fieldRow}>
@@ -780,6 +943,40 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     fontSize: 12,
     color: '#000000',
+  },
+  // Editable model row (encrypted + unlocked). High-contrast border
+  // so the affordance is visible on e-ink.
+  modelInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#000000',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  modelSaveBtn: {
+    marginLeft: 8,
+    borderWidth: 1,
+    borderColor: '#000000',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: '#000000',
+  },
+  modelSaveBtnOff: {
+    backgroundColor: '#ffffff',
+  },
+  modelSaveBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  modelSaveBtnTextOff: {
+    color: '#000000',
+  },
+  modelError: {
+    fontSize: 12,
+    color: '#000000',
+    fontStyle: 'italic',
+    marginTop: 4,
   },
   activeBlock: {
     paddingVertical: 4,

@@ -36,6 +36,7 @@ import {
   hasDerivedKey,
 } from '../src/storage/derivedKey';
 import {
+  changeModel,
   changePin,
   disableEncryption,
   encryptInitial,
@@ -253,6 +254,99 @@ describe('lockNow / isInsecure', () => {
     const {deps} = makeDeps();
     await writePrefs(deps.prefs, {...DEFAULT_PREFS, encryptionMode: 'encrypted'});
     expect((await readPrefs(deps.prefs)).encryptionMode).toBe('encrypted');
+  });
+});
+
+describe('changeModel', () => {
+  it('rewrites the vault with the new model and refreshes sessionKey', async () => {
+    const {deps} = makeDeps();
+    await encryptInitial(deps, '123456', [f('anthropic'), f('openai')]);
+
+    const r = await changeModel(deps, 'anthropic', 'claude-opus-4-8');
+    expect(r.ok).toBe(true);
+
+    // In-memory session reflects the change immediately…
+    const active = getActiveKeys();
+    expect(active?.find(x => x.provider === 'anthropic')?.model).toBe(
+      'claude-opus-4-8',
+    );
+    // …the other provider's entry is untouched…
+    expect(active?.find(x => x.provider === 'openai')?.model).toBe(
+      'gpt-4o-mini',
+    );
+    // …and the on-disk vault decrypts to the same list with the
+    // ORIGINAL pin (the KDF salt was reused, not rolled).
+    const disk = await readVault(deps.vault, '123456');
+    expect(disk.kind).toBe('ok');
+    if (disk.kind === 'ok') {
+      expect(disk.files.find(x => x.provider === 'anthropic')?.model).toBe(
+        'claude-opus-4-8',
+      );
+    }
+  });
+
+  it('trims surrounding whitespace on the new model id', async () => {
+    const {deps} = makeDeps();
+    await encryptInitial(deps, '123456', [f('anthropic')]);
+    const r = await changeModel(deps, 'anthropic', '  claude-opus-4-8  ');
+    expect(r.ok).toBe(true);
+    expect(getActiveKeys()?.[0].model).toBe('claude-opus-4-8');
+  });
+
+  it('fails when the vault is locked (no derived key in memory)', async () => {
+    const {deps} = makeDeps();
+    await encryptInitial(deps, '123456', [f('anthropic')]);
+    lockNow();
+    const r = await changeModel(deps, 'anthropic', 'claude-opus-4-8');
+    expect(r).toEqual({ok: false, reason: 'vault is locked'});
+  });
+
+  it('fails on an empty model id', async () => {
+    const {deps} = makeDeps();
+    await encryptInitial(deps, '123456', [f('anthropic')]);
+    const r = await changeModel(deps, 'anthropic', '   ');
+    expect(r.ok).toBe(false);
+  });
+
+  it('fails when no entry exists for the provider', async () => {
+    const {deps} = makeDeps();
+    await encryptInitial(deps, '123456', [f('anthropic')]);
+    const r = await changeModel(deps, 'gemini', 'gemini-2.5-pro');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain('gemini');
+    }
+  });
+
+  it('fails cleanly when the on-disk vault is gone', async () => {
+    const {io, deps} = makeDeps();
+    await encryptInitial(deps, '123456', [f('anthropic')]);
+    await io.remove(VAULT_PATH);
+    const r = await changeModel(deps, 'anthropic', 'claude-opus-4-8');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain('no vault on disk');
+    }
+    // Session stays on the old model — nothing was committed.
+    expect(getActiveKeys()?.[0].model).toBe('claude-haiku-4-5');
+  });
+
+  it('fails when the in-memory key does not match the on-disk vault', async () => {
+    const {deps} = makeDeps();
+    await encryptInitial(deps, '123456', [f('anthropic')]);
+    const staleKey = getDerivedKey();
+    // Rotate the pin (rolls salt + key) then restore the stale key.
+    await changePin(deps, '654321', [f('anthropic')]);
+    expect(staleKey).not.toBeNull();
+    derivedKeyTesting.reset();
+    setActiveKeys([f('anthropic')]);
+    const {setDerivedKey} = require('../src/storage/derivedKey');
+    setDerivedKey(staleKey!);
+    const r = await changeModel(deps, 'anthropic', 'claude-opus-4-8');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain('does not open');
+    }
   });
 });
 

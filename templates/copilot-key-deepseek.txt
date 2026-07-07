@@ -17,3 +17,7 @@
 provider=deepseek
 model=deepseek-chat
 key=sk-REPLACE-ME
+
+# Cap on reply length in tokens (range 16-8192). Longer replies cost
+# more; see the provider's pricing page. Raise it if answers cut off.
+max_tokens=256

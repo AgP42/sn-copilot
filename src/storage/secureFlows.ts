@@ -6,11 +6,21 @@
 // here. Each returns a structured result so the UI can decide what
 // to render next.
 
-import type {KeyFile, EncryptionMode} from '../types';
-import {readVault, writeVault, deleteVault, type VaultDeps} from './vault';
+import type {KeyFile, EncryptionMode, ProviderId} from '../types';
+import {
+  readVault,
+  rewriteVault,
+  writeVault,
+  deleteVault,
+  type VaultDeps,
+} from './vault';
 import {setEncryptionMode, type PrefsDeps} from './prefs';
-import {clear as clearSessionKey, setActiveKeys} from './sessionKey';
-import {clearDerivedKey, setDerivedKey} from './derivedKey';
+import {
+  clear as clearSessionKey,
+  getActiveKeys,
+  setActiveKeys,
+} from './sessionKey';
+import {clearDerivedKey, getDerivedKey, setDerivedKey} from './derivedKey';
 
 export type Deps = {
   vault: VaultDeps;
@@ -115,6 +125,44 @@ export const mergeIntoVault = async (
     setActiveKeys(merged);
     setDerivedKey(key);
     return {ok: true, value: merged};
+  } catch (e) {
+    return {ok: false, reason: (e as Error).message};
+  }
+};
+
+// Change the model id of one provider's entry while the vault stays
+// encrypted. Uses the cached derived key + rewriteVault, so the user
+// is NOT re-prompted for the PIN (the model id is not a secret; the
+// vault is already open in memory). Fails cleanly when locked.
+//
+// This closes a real gap: with an encrypted vault the model chosen at
+// migration time was frozen — the .txt is gone, Settings showed the
+// model read-only, and the only ways out were dropping a fresh .txt
+// (merge flow) or disabling encryption entirely.
+export const changeModel = async (
+  deps: Deps,
+  provider: ProviderId,
+  newModel: string,
+): Promise<FlowResult<KeyFile[]>> => {
+  const trimmed = newModel.trim();
+  if (trimmed.length === 0) {
+    return {ok: false, reason: 'model must not be empty'};
+  }
+  const files = getActiveKeys();
+  const key = getDerivedKey();
+  if (files === null || key === null) {
+    return {ok: false, reason: 'vault is locked'};
+  }
+  if (!files.some(f => f.provider === provider)) {
+    return {ok: false, reason: `no key file for provider "${provider}"`};
+  }
+  const updated = files.map(f =>
+    f.provider === provider ? {...f, model: trimmed} : f,
+  );
+  try {
+    await rewriteVault(deps.vault, key, updated);
+    setActiveKeys(updated);
+    return {ok: true, value: updated};
   } catch (e) {
     return {ok: false, reason: (e as Error).message};
   }

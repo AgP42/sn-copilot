@@ -15,3 +15,7 @@
 provider=gemini
 model=gemini-2.5-flash
 key=REPLACE-ME
+
+# Cap on reply length in tokens (range 16-8192). Longer replies cost
+# more; see the provider's pricing page. Raise it if answers cut off.
+max_tokens=256
