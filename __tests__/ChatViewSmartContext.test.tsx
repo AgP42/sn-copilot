@@ -182,8 +182,9 @@ describe('ChatView smart routing — freeform input', () => {
     await act(async () => {
       await flushSend();
     });
-    act(() => {
+    await act(async () => {
       findByTestID(tree, 'chat-page-attach').props.onPress();
+      await flushSend();
     });
     act(() => {
       findByTestID(tree, 'chat-input').props.onChangeText('anything at all');
@@ -205,8 +206,9 @@ describe('ChatView smart routing — freeform input', () => {
     await act(async () => {
       await flushSend();
     });
-    act(() => {
+    await act(async () => {
       findByTestID(tree, 'chat-page-attach').props.onPress();
+      await flushSend();
     });
     act(() => {
       findByTestID(tree, 'chat-input').props.onChangeText('first');
@@ -300,44 +302,31 @@ describe('ChatView — page attach thumbnail (B1a)', () => {
     );
   });
 
-  it('follows a page flip: thumbnail updates and the toggle resets', async () => {
-    jest.useFakeTimers();
-    try {
-      seedPage(); // page 1
-      const P2_B64 = 'BBBBBBEBBBBBBBEBBBBBBBEQ==';
-      // Probe reports the user flipped to page 2; refresher returns the
-      // page-2 capture.
-      setPageContextProbe(async () => ({path: '/notes/x', page: 2}));
-      setPageContextRefresher(async () => ({
-        notePath: '/notes/x',
-        page: 2,
-        screenshotPath: '/tmp/x2.png',
-        screenshotBase64: P2_B64,
-        pageText: 'page two',
-      }));
-      const tree = render();
-      // initial tick (page 1) + attach it
-      await act(async () => {
-        await Promise.resolve();
-      });
-      act(() => {
-        findByTestID(tree, 'chat-page-attach').props.onPress();
-      });
-      // advance one poll interval → getFreshPageContext sees page 2
-      await act(async () => {
-        jest.advanceTimersByTime(2000);
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      // thumbnail now shows page 2, and the toggle was reset to off
-      expect(findByTestID(tree, 'chat-page-thumb').props.source.uri).toContain(
-        P2_B64,
-      );
-      const {findAllText} = require('./helpers/textTraversal');
-      expect(findAllText(tree).join(' | ')).toContain('p.2');
-    } finally {
-      jest.useRealTimers();
-    }
+  it('tapping attach refreshes to the page currently on screen', async () => {
+    seedPage(); // open-time page
+    const P2_B64 = 'BBBBBBEBBBBBBBEBBBBBBBEQ==';
+    // User has flipped to a different page since open: probe reports
+    // it, refresher returns that page's capture.
+    setPageContextProbe(async () => ({path: '/notes/x', page: 2}));
+    setPageContextRefresher(async () => ({
+      notePath: '/notes/x',
+      page: 2,
+      screenshotPath: '/tmp/x2.png',
+      screenshotBase64: P2_B64,
+      pageText: 'page two',
+    }));
+    const tree = render();
+    await act(async () => {
+      await flushSend();
+    });
+    // Tapping attach re-captures the current page before turning on.
+    await act(async () => {
+      findByTestID(tree, 'chat-page-attach').props.onPress();
+      await flushSend();
+    });
+    expect(findByTestID(tree, 'chat-page-thumb').props.source.uri).toContain(
+      P2_B64,
+    );
   });
 
   it('text-only provider shows the image-not-sent hint when attached', async () => {

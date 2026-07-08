@@ -42,7 +42,11 @@ import CopilotOverlay from '../native/CopilotOverlay';
 import {debugLog, infoLog} from '../diagnostics/log';
 import {redactPii} from '../privacy/redact';
 import {tryAcquire, release} from '../reentrancy/inFlightGuard';
-import {getFreshPageContext, type PageContext} from '../scope/pageContext';
+import {
+  getFreshPageContext,
+  getPageContext,
+  type PageContext,
+} from '../scope/pageContext';
 import {
   conversationPreview,
   DEFAULT_CHAT_MAX_TOKENS,
@@ -74,10 +78,6 @@ import {useProviderClient} from './useProviderClient';
 // aborts the request and unblocks the in-flight guard so a hung
 // call can never permanently lock further sends.
 const SEND_TIMEOUT_MS = 60_000;
-// How often the panel re-checks which page the user is on so the
-// attach thumbnail follows page flips. The probe is two cheap SDK
-// calls; a capture only runs when the page actually changed.
-const PAGE_SYNC_MS = 2_000;
 
 // Three-step font scaling. Scale factors keep e-ink rendering
 // readable across 7.8" and 10.3" devices without per-device tables.
@@ -345,46 +345,40 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
   const nextIdRef = useRef<number>(1);
   const newId = () => `${newMessageId()}_${nextIdRef.current++}`;
 
-  // Keep the thumbnail in sync with the page actually on screen.
-  // The panel only covers part of the display, so the user can flip
-  // pages beneath it — the thumbnail (and what a quick action or an
-  // attached freeform message would send) must follow. getFresh-
-  // PageContext probes the current file+page with two cheap SDK
-  // calls and only re-captures the image when the page actually
-  // changed, so polling is light. When the page changes we also drop
-  // any pending attach toggle — it referred to the page the user
-  // just left.
+  // Load the thumbnail once when the panel opens (the sidebar-tap
+  // capture = the page in view at open). No background polling — a
+  // capture is expensive on e-ink, so we refresh on demand instead
+  // (tapping the thumbnail re-captures the current page; see
+  // onToggleAttach). The send path independently re-captures via
+  // getFreshPageContext, so the page actually sent always reflects
+  // what's on screen even if the thumbnail is from open time.
   useEffect(() => {
     let cancelled = false;
-    const tick = async (): Promise<void> => {
-      const ctx = await getFreshPageContext().catch(() => null);
-      if (cancelled) {
-        return;
-      }
-      setPageCtx(prev => {
-        if (
-          prev !== null &&
-          ctx !== null &&
-          prev.notePath === ctx.notePath &&
-          prev.page === ctx.page
-        ) {
-          return prev; // same page — no re-render, keep the toggle
+    getPageContext()
+      .then(ctx => {
+        if (!cancelled) {
+          setPageCtx(ctx);
         }
-        // Page changed (or first load): reset the freeform toggle so
-        // the user re-confirms attaching the NEW page.
-        setAttachPage(false);
-        return ctx;
-      });
-    };
-    tick().catch(() => undefined);
-    const id = setInterval(() => {
-      tick().catch(() => undefined);
-    }, PAGE_SYNC_MS);
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
-      clearInterval(id);
     };
   }, []);
+
+  // Tapping the thumbnail: when turning attach ON, first refresh to
+  // the page currently on screen (cheap probe, capture only if the
+  // page changed) so the attached image is never stale. Turning OFF
+  // is instant.
+  const onToggleAttach = useCallback(async () => {
+    if (attachPage) {
+      setAttachPage(false);
+      return;
+    }
+    const fresh = await getFreshPageContext().catch(() => null);
+    setPageCtx(fresh);
+    setAttachPage(fresh !== null);
+  }, [attachPage]);
 
   // On mount: restore the most-recent conversation if we have wiring
   // + a key file. New chats inherit a fresh id only at first send.
@@ -857,7 +851,7 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
               ? 'Page attached — tap to detach'
               : 'Attach the current page'
           }
-          onPress={() => setAttachPage(v => !v)}
+          onPress={onToggleAttach}
           style={[
             styles.attachRow,
             attachPage && styles.attachRowOn,
@@ -1183,13 +1177,14 @@ function ChatBubble({
   );
 }
 
-// Short "file p.N" label for the attach thumbnail. Strips directory
-// and .note/.pdf extension from the path so only the notebook name
-// shows next to the page number.
+// Notebook name for the attach thumbnail. Strips directory and the
+// .note/.pdf extension. The page number is intentionally omitted —
+// the firmware's page index doesn't match the on-screen page label
+// 1:1, so showing it was misleading; the thumbnail image itself
+// makes the page obvious.
 const pageLabelOf = (ctx: PageContext): string => {
   const base = ctx.notePath.split('/').pop() ?? ctx.notePath;
-  const name = base.replace(/\.(note|pdf)$/i, '');
-  return `${name} · p.${ctx.page}`;
+  return base.replace(/\.(note|pdf)$/i, '');
 };
 
 const styles = StyleSheet.create({
