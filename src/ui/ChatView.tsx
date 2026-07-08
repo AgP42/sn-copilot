@@ -42,11 +42,7 @@ import CopilotOverlay from '../native/CopilotOverlay';
 import {debugLog, infoLog} from '../diagnostics/log';
 import {redactPii} from '../privacy/redact';
 import {tryAcquire, release} from '../reentrancy/inFlightGuard';
-import {
-  getFreshPageContext,
-  getPageContext,
-  type PageContext,
-} from '../scope/pageContext';
+import {getFreshPageContext, type PageContext} from '../scope/pageContext';
 import {
   conversationPreview,
   DEFAULT_CHAT_MAX_TOKENS,
@@ -78,6 +74,10 @@ import {useProviderClient} from './useProviderClient';
 // aborts the request and unblocks the in-flight guard so a hung
 // call can never permanently lock further sends.
 const SEND_TIMEOUT_MS = 60_000;
+// How often the panel re-checks which page the user is on so the
+// attach thumbnail follows page flips. The probe is two cheap SDK
+// calls; a capture only runs when the page actually changed.
+const PAGE_SYNC_MS = 2_000;
 
 // Three-step font scaling. Scale factors keep e-ink rendering
 // readable across 7.8" and 10.3" devices without per-device tables.
@@ -345,22 +345,44 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
   const nextIdRef = useRef<number>(1);
   const newId = () => `${newMessageId()}_${nextIdRef.current++}`;
 
-  // On mount: load the current page capture for the thumbnail. Uses
-  // the stored capture promise (fired at sidebar tap) so the panel
-  // doesn't wait; falls back to null if capture failed or the file
-  // isn't a note/PDF. The thumbnail is display + toggle only — the
-  // actual send re-captures via getFreshPageContext so the image
-  // sent always reflects the page currently on screen.
+  // Keep the thumbnail in sync with the page actually on screen.
+  // The panel only covers part of the display, so the user can flip
+  // pages beneath it — the thumbnail (and what a quick action or an
+  // attached freeform message would send) must follow. getFresh-
+  // PageContext probes the current file+page with two cheap SDK
+  // calls and only re-captures the image when the page actually
+  // changed, so polling is light. When the page changes we also drop
+  // any pending attach toggle — it referred to the page the user
+  // just left.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      const ctx = await getPageContext().catch(() => null);
-      if (!cancelled) {
-        setPageCtx(ctx);
+    const tick = async (): Promise<void> => {
+      const ctx = await getFreshPageContext().catch(() => null);
+      if (cancelled) {
+        return;
       }
-    })();
+      setPageCtx(prev => {
+        if (
+          prev !== null &&
+          ctx !== null &&
+          prev.notePath === ctx.notePath &&
+          prev.page === ctx.page
+        ) {
+          return prev; // same page — no re-render, keep the toggle
+        }
+        // Page changed (or first load): reset the freeform toggle so
+        // the user re-confirms attaching the NEW page.
+        setAttachPage(false);
+        return ctx;
+      });
+    };
+    tick().catch(() => undefined);
+    const id = setInterval(() => {
+      tick().catch(() => undefined);
+    }, PAGE_SYNC_MS);
     return () => {
       cancelled = true;
+      clearInterval(id);
     };
   }, []);
 

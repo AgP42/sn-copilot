@@ -36,7 +36,12 @@ import React from 'react';
 import {act, create, type ReactTestRenderer} from 'react-test-renderer';
 import ChatView from '../src/ui/ChatView';
 import {__testing__ as guardTesting} from '../src/reentrancy/inFlightGuard';
-import {setPageContext, __testing__ as pageCtxTesting} from '../src/scope/pageContext';
+import {
+  setPageContext,
+  setPageContextProbe,
+  setPageContextRefresher,
+  __testing__ as pageCtxTesting,
+} from '../src/scope/pageContext';
 import type {CustomAction, KeyFile} from '../src/types';
 import fakeProvider from '../src/providers/fakeProvider';
 import {findByTestID} from './helpers/textTraversal';
@@ -293,6 +298,46 @@ describe('ChatView — page attach thumbnail (B1a)', () => {
     expect(findByTestID(tree, 'chat-page-thumb').props.source.uri).toContain(
       PAGE_B64,
     );
+  });
+
+  it('follows a page flip: thumbnail updates and the toggle resets', async () => {
+    jest.useFakeTimers();
+    try {
+      seedPage(); // page 1
+      const P2_B64 = 'BBBBBBEBBBBBBBEBBBBBBBEQ==';
+      // Probe reports the user flipped to page 2; refresher returns the
+      // page-2 capture.
+      setPageContextProbe(async () => ({path: '/notes/x', page: 2}));
+      setPageContextRefresher(async () => ({
+        notePath: '/notes/x',
+        page: 2,
+        screenshotPath: '/tmp/x2.png',
+        screenshotBase64: P2_B64,
+        pageText: 'page two',
+      }));
+      const tree = render();
+      // initial tick (page 1) + attach it
+      await act(async () => {
+        await Promise.resolve();
+      });
+      act(() => {
+        findByTestID(tree, 'chat-page-attach').props.onPress();
+      });
+      // advance one poll interval → getFreshPageContext sees page 2
+      await act(async () => {
+        jest.advanceTimersByTime(2000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // thumbnail now shows page 2, and the toggle was reset to off
+      expect(findByTestID(tree, 'chat-page-thumb').props.source.uri).toContain(
+        P2_B64,
+      );
+      const {findAllText} = require('./helpers/textTraversal');
+      expect(findAllText(tree).join(' | ')).toContain('p.2');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('text-only provider shows the image-not-sent hint when attached', async () => {
