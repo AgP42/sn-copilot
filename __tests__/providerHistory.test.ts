@@ -8,7 +8,8 @@
  *   2. Cap to HISTORY_MESSAGE_LIMIT most recent messages.
  *   3. Per-turn truncation at HISTORY_TURN_CHAR_LIMIT.
  *   4. Leading assistant turns drop (Anthropic requires user-first).
- *   5. Consecutive same-role turns merge (strict alternation).
+ *   5. Consecutive same-role turns merge (strict alternation), and
+ *      the merged text is re-capped at HISTORY_TURN_CHAR_LIMIT.
  *   6. Empty input → empty output (single-turn behaviour preserved).
  */
 import {
@@ -94,6 +95,14 @@ describe('buildProviderHistory', () => {
       {role: 'user', text: 'first try\n\nsecond try'},
       {role: 'assistant', text: 'reply'},
     ]);
+  });
+
+  it('caps a merged run at the per-turn limit', () => {
+    const long = 'x'.repeat(HISTORY_TURN_CHAR_LIMIT + 500);
+    const out = buildProviderHistory([u(long), u(long), u(long), a('reply')]);
+    expect(out).toHaveLength(2);
+    expect(out[0].text).toHaveLength(HISTORY_TURN_CHAR_LIMIT);
+    expect(out[0].text.endsWith('…')).toBe(true);
   });
 
   it('handles messages with no text field (transient shapes)', () => {

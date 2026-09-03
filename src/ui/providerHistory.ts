@@ -68,9 +68,11 @@ export const buildProviderHistory = (
   for (const t of recent) {
     const last = alternating[alternating.length - 1];
     if (last !== undefined && last.role === t.role) {
+      // Re-truncate: two capped turns concatenate past the per-turn
+      // cap, and a merged run of three or more compounds it further.
       alternating[alternating.length - 1] = {
         role: t.role,
-        text: `${last.text}\n\n${t.text}`,
+        text: truncate(`${last.text}\n\n${t.text}`),
       };
     } else {
       alternating.push(t);
