@@ -43,7 +43,16 @@ export interface ProviderRequest {
 
 export interface ProviderResponse {
   text: string;
-  usage: {inputTokens: number; outputTokens: number};
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    // Prompt-cache accounting, when the provider reports it
+    // (Anthropic today). Cache reads bill at ~10% of the input rate —
+    // surfacing them keeps the cost picture honest in logs and lets
+    // the user verify caching works from their provider dashboard.
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+  };
   latencyMs: number;
   modelId: string;
 }
