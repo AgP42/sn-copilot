@@ -30,6 +30,12 @@ export const HISTORY_TURN_CHAR_LIMIT = 4000;
 export type HistorySource = {
   role: string;
   text?: string;
+  // Set on locally-generated "Error: ..." bubbles. They look like
+  // assistant turns on screen and in the persisted conversation, but
+  // replaying one tells the model it previously answered with a
+  // failure it never produced — it then apologises for, explains, or
+  // imitates an error that never happened.
+  isError?: boolean;
 };
 
 const truncate = (text: string): string =>
@@ -44,6 +50,9 @@ export const buildProviderHistory = (
   for (const m of messages) {
     if (m.role !== 'user' && m.role !== 'assistant') {
       continue; // 'thinking' placeholder and any future transient roles
+    }
+    if (m.isError === true) {
+      continue; // local failure notice, not something the model said
     }
     const text = (m.text ?? '').trim();
     if (text.length === 0) {

@@ -136,6 +136,10 @@ type ChatMessage =
       text: string;
       modelId?: string;
       latencyMs?: number;
+      // Locally-generated failure notice rather than a provider reply.
+      // Rendered like any assistant bubble, but never replayed as
+      // conversation history — see buildProviderHistory.
+      isError?: boolean;
     }
   | {id: string; role: 'thinking'};
 
@@ -151,6 +155,7 @@ const toChatMessages = (msgs: ConversationMessage[]): ChatMessage[] =>
           text: m.text,
           modelId: m.modelId,
           latencyMs: m.latencyMs,
+          isError: m.isError,
         },
   );
 
@@ -177,6 +182,7 @@ const toConversationMessages = (
         text: m.text,
         modelId: m.modelId,
         latencyMs: m.latencyMs,
+        isError: m.isError,
         createdAt: now,
       });
     }
@@ -505,6 +511,8 @@ export default function ChatView(props: ChatViewProps): React.JSX.Element {
         id: newId(),
         role: 'assistant',
         text: `Error: ${userVisible}`,
+        // Shown to the user, never sent back to the provider.
+        isError: true,
       };
       setMessages(curr => {
         const without = curr.filter(m => m.id !== thinkingMsg.id);

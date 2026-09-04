@@ -11,6 +11,7 @@
  *   5. Consecutive same-role turns merge (strict alternation), and
  *      the merged text is re-capped at HISTORY_TURN_CHAR_LIMIT.
  *   6. Empty input → empty output (single-turn behaviour preserved).
+ *   7. Locally-generated error bubbles (isError) never reach the wire.
  */
 import {
   buildProviderHistory,
@@ -103,6 +104,36 @@ describe('buildProviderHistory', () => {
     expect(out).toHaveLength(2);
     expect(out[0].text).toHaveLength(HISTORY_TURN_CHAR_LIMIT);
     expect(out[0].text.endsWith('…')).toBe(true);
+  });
+
+  it('drops locally-generated error bubbles', () => {
+    // A failed send leaves an "Error: ..." assistant bubble on screen.
+    // Replaying it would tell the model it had answered with a failure
+    // it never produced.
+    expect(
+      buildProviderHistory([
+        u('Summarize this'),
+        {role: 'assistant', text: 'Error: anthropic: HTTP 429', isError: true},
+        u('Summarize this'),
+        a('Here is the summary.'),
+      ]),
+    ).toEqual([
+      // The two identical user turns merge, as consecutive same-role
+      // turns always do once the error bubble between them is gone.
+      {role: 'user', text: 'Summarize this\n\nSummarize this'},
+      {role: 'assistant', text: 'Here is the summary.'},
+    ]);
+  });
+
+  it('keeps assistant turns that are not flagged as errors', () => {
+    // Guards against over-filtering: a real reply whose text merely
+    // begins with "Error" is still a genuine turn.
+    expect(
+      buildProviderHistory([u('Q'), a('Error handling works like this...')]),
+    ).toEqual([
+      {role: 'user', text: 'Q'},
+      {role: 'assistant', text: 'Error handling works like this...'},
+    ]);
   });
 
   it('handles messages with no text field (transient shapes)', () => {
