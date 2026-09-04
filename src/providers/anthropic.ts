@@ -35,11 +35,13 @@ export const createAnthropicClient = (
     const start = Date.now();
     // Image block (when present) precedes the text — Anthropic's
     // documented best practice and what the Messages API expects.
+    type CacheControl = {type: 'ephemeral'};
     type Block =
       | {type: 'text'; text: string}
       | {
           type: 'image';
           source: {type: 'base64'; media_type: string; data: string};
+          cache_control?: CacheControl;
         };
     const content: Block[] = [];
     if (req.imageBase64) {
@@ -50,6 +52,24 @@ export const createAnthropicClient = (
           media_type: 'image/png',
           data: req.imageBase64,
         },
+        // Cache breakpoint at the END of the stable prefix. Everything
+        // before and including this block — the system prompt and the
+        // page screenshot — is byte-identical for every send against
+        // the same capture (pageContext holds one base64 string per
+        // sidebar tap), so repeat sends bill it at ~10% instead of
+        // full price. The volatile user text follows and stays outside
+        // the cached region, which is the whole point: a top-level
+        // marker would auto-place AFTER that text and cache a prefix
+        // nothing ever matches, paying the 1.25x write premium on
+        // every request for zero reads.
+        //
+        // Only set when an image is present. Without one the stable
+        // prefix is the system prompt alone (~400 tokens), below every
+        // model's minimum cacheable size, so a marker there would be a
+        // silent no-op — and text-only paths (Test Connection, the
+        // Grill judge/rephrase calls) keep their exact previous wire
+        // shape.
+        cache_control: {type: 'ephemeral'},
       });
     }
     content.push({type: 'text', text: req.userText});
@@ -58,14 +78,6 @@ export const createAnthropicClient = (
       max_tokens: req.maxTokens,
       system: req.systemPrompt,
       messages: [{role: 'user', content}],
-      // Top-level auto-caching: the API places a cache breakpoint on
-      // the last cacheable block. The stable request prefix (system
-      // prompt + page image, which precedes the user text) is then
-      // billed at ~10% of the input rate on subsequent sends in a
-      // session instead of full price. Below the model's minimum
-      // cacheable size this is silently a no-op — never an error —
-      // so it is safe to send unconditionally.
-      cache_control: {type: 'ephemeral'},
     };
     const res = await fetchFn(ENDPOINT, {
       method: 'POST',
