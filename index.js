@@ -7,6 +7,7 @@ import {
   PluginCommAPI,
   PluginFileAPI,
   PluginDocAPI,
+  FileUtils,
 } from 'sn-plugin-lib';
 import {
   installPluginRouter,
@@ -16,7 +17,10 @@ import {
 } from './src/pluginRouter';
 import CopilotOverlay from './src/native/CopilotOverlay';
 import {debugLog, infoLog} from './src/diagnostics/log';
-import {captureCurrentPage} from './src/scope/captureScreenshot';
+import {
+  captureCurrentPage,
+  sweepScratchOrphans,
+} from './src/scope/captureScreenshot';
 import {setPageContextPromise} from './src/scope/pageContext';
 import {buildWiringBundle} from './src/storage/wiring';
 import {installSecureLifecycle} from './src/storage/lifecycleWiring';
@@ -97,6 +101,18 @@ buildWiringBundle()
     );
   });
 
+// Purge scratch PNGs left behind by interrupted captures or by plugin
+// versions that predate per-capture deletion. Each orphan is a full
+// render of a page the user had open — they should never persist.
+// Fire-and-forget: a sweep failure must not block bootstrap.
+sweepScratchOrphans({
+  manager: PluginManager,
+  listFiles: path => FileUtils.listFiles(path),
+  deleteFile: path => FileUtils.deleteFile(path),
+}).catch(e => {
+  console.log('[COPILOT] scratch sweep failed:', String(e));
+});
+
 // Route the sidebar button click into the native overlay.
 // Subscribing here (rather than installing a second listener) keeps
 // the single-listener contract in src/pluginRouter.ts.
@@ -127,6 +143,7 @@ subscribeToButtonEvents(async event => {
     doc: PluginDocAPI,
     manager: PluginManager,
     logger: consoleLogger,
+    deleteFile: path => FileUtils.deleteFile(path),
   }).catch(e => {
     console.log('[COPILOT] captureCurrentPage threw', String(e));
     return null;
