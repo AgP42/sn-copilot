@@ -87,5 +87,24 @@ export const buildProviderHistory = (
       alternating.push(t);
     }
   }
+
+  // Drop a trailing 'user' turn. The caller appends the current user
+  // message directly after this history, so leaving one here puts two
+  // user turns side by side on the wire — breaking the strict
+  // alternation this module exists to guarantee, and which Anthropic's
+  // Messages API documents as a requirement.
+  //
+  // Only one can be present: consecutive same-role turns were merged
+  // just above. In the app this arises exactly when the previous send
+  // failed — the error bubble is dropped by the isError check, leaving
+  // the unanswered question last. The model never saw that question and
+  // never replied to it, so the retry that follows carries the user's
+  // intent; replaying the orphan would only repeat it.
+  if (
+    alternating.length > 0 &&
+    alternating[alternating.length - 1].role === 'user'
+  ) {
+    alternating.pop();
+  }
   return alternating;
 };
