@@ -93,6 +93,27 @@ const nextScratchFilename = (): string =>
 // user file that merely contains "copilot-page" can never match.
 const SCRATCH_FILENAME_RE = /^copilot-page-\d+-\d+\.png$/;
 
+// Last path segment. Comparing by basename rather than full path keeps
+// the in-flight check immune to shape differences between the path we
+// mint and the one listFiles reports (a trailing slash on the plugin
+// dir would otherwise yield '/dir//file.png' vs '/dir/file.png').
+const baseNameOf = (path: string): string =>
+  path.slice(path.lastIndexOf('/') + 1);
+
+// Scratch files handed out by resolveScratchPath and not yet
+// discarded, tracked by basename.
+//
+// The bootstrap sweep is fired fire-and-forget at module load while
+// the sidebar button listener is registered moments later, so a tap
+// can be rendering into a scratch file while the sweep is still
+// resolving its directory. getPluginDirPath + listFiles are slow
+// round-trips on e-ink storage, so the sweep's snapshot can legitimately
+// include a file written after it started. Deleting that file makes
+// readPngAsBase64 fetch a missing path, capture returns null, and the
+// send goes out with no page context at all — a silent loss of the
+// plugin's core feature with only a warn to show for it.
+const inFlightScratch = new Set<string>();
+
 // Best-effort removal of a scratch PNG. Capture must never fail
 // because cleanup did — the bytes are already in memory when this
 // runs — so failures log and move on.
@@ -101,16 +122,24 @@ const discardScratch = async (
   pngPath: string,
   logger: Logger,
 ): Promise<void> => {
-  if (deps.deleteFile === undefined) {
-    return;
-  }
+  // Released even when no deleteFile bridge is wired, and even when
+  // the delete fails: once capture is done with the file the sweep is
+  // the correct owner of it, and holding the name forever would make
+  // an orphan permanently unsweepable.
   try {
-    const removed = await deps.deleteFile(pngPath);
-    if (!removed) {
-      logger.warn(`${TAG} scratch delete returned false: ${pngPath}`);
+    if (deps.deleteFile === undefined) {
+      return;
     }
-  } catch (e) {
-    logger.warn(`${TAG} scratch delete threw: ${(e as Error).message}`);
+    try {
+      const removed = await deps.deleteFile(pngPath);
+      if (!removed) {
+        logger.warn(`${TAG} scratch delete returned false: ${pngPath}`);
+      }
+    } catch (e) {
+      logger.warn(`${TAG} scratch delete threw: ${(e as Error).message}`);
+    }
+  } finally {
+    inFlightScratch.delete(baseNameOf(pngPath));
   }
 };
 
@@ -186,7 +215,9 @@ const resolveScratchPath = async (
   // before any plugin file has been written — fall back to a known-
   // writable Android-data path the SDK uses internally.
   const dir = pluginDir && pluginDir.length > 0 ? pluginDir : '/sdcard/Android/data';
-  return `${dir}/${nextScratchFilename()}`;
+  const filename = nextScratchFilename();
+  inFlightScratch.add(filename);
+  return `${dir}/${filename}`;
 };
 
 // Walks an Element[] and returns concatenated typed-text content
@@ -439,9 +470,17 @@ const captureDocPage = async (
 // `copilot-page-<ts>-<n>.png` files behind; each one is a full render
 // of a page the user had open. Called fire-and-forget at bootstrap.
 //
-// Sweeps the same directory resolveScratchPath targets. Deletion is
-// filename-strict (SCRATCH_FILENAME_RE), so even on the shared
-// `/sdcard/Android/data` fallback only our own scratch files match.
+// Sweeps the plugin's own private directory ONLY. It deliberately does
+// not use resolveScratchPath's `/sdcard/Android/data` fallback: that is
+// shared storage, and listing or deleting there needs FILE:READ +
+// FILE:WRITE. On Chauvet firmware the framework throws SecurityException
+// from inside RTNFileModule, synchronously, where no JS try/catch at the
+// call site can catch it — the host then kills the plugin. Capture may
+// still use the fallback (it writes a file it immediately reads back);
+// an unattended bootstrap sweep must not.
+//
+// Deletion is filename-strict (SCRATCH_FILENAME_RE) and skips files a
+// capture currently holds.
 export type SweepDeps = {
   manager: ManagerLike;
   listFiles: (
@@ -454,11 +493,18 @@ export type SweepDeps = {
 export const sweepScratchOrphans = async (deps: SweepDeps): Promise<number> => {
   const noop = (): void => {};
   const logger: Logger = deps.logger ?? {log: noop, warn: noop};
-  const scratchPath = await resolveScratchPath(deps.manager, logger);
-  if (scratchPath === null) {
+  let pluginDir: string | null | undefined;
+  try {
+    pluginDir = await deps.manager.getPluginDirPath();
+  } catch (e) {
+    logger.warn(`${TAG} sweep: getPluginDirPath threw: ${(e as Error).message}`);
     return 0;
   }
-  const dir = scratchPath.slice(0, scratchPath.lastIndexOf('/'));
+  if (!pluginDir || pluginDir.length === 0) {
+    logger.log(`${TAG} sweep: no plugin dir — skipping (shared storage is out of scope)`);
+    return 0;
+  }
+  const dir = pluginDir.endsWith('/') ? pluginDir.slice(0, -1) : pluginDir;
   let entries: Array<{path: string; type: number}> | null | undefined;
   try {
     entries = await deps.listFiles(dir);
@@ -474,9 +520,12 @@ export const sweepScratchOrphans = async (deps: SweepDeps): Promise<number> => {
     if (entry.type !== 1) {
       continue;
     }
-    const name = entry.path.slice(entry.path.lastIndexOf('/') + 1);
+    const name = baseNameOf(entry.path);
     if (!SCRATCH_FILENAME_RE.test(name)) {
       continue;
+    }
+    if (inFlightScratch.has(name)) {
+      continue; // a capture is writing or still reading this one
     }
     try {
       if (await deps.deleteFile(entry.path)) {

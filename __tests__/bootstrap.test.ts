@@ -170,9 +170,35 @@ describe('index.js bootstrap', () => {
       listFiles: unknown;
       deleteFile: unknown;
     };
-    expect(typeof deps.listFiles).toBe('function');
-    expect(typeof deps.deleteFile).toBe('function');
     expect(deps.manager).toBeDefined();
+    // Invoke the bridges rather than only type-checking them: these
+    // thin lambdas are the whole wiring, and a wrong FileUtils method
+    // name here fails only at runtime on device.
+    const {FileUtils} = jest.requireMock('sn-plugin-lib') as {
+      FileUtils: {
+        listFiles: jest.Mock;
+        deleteFile: jest.Mock;
+      };
+    };
+    await (deps.listFiles as (p: string) => Promise<unknown>)('/plugin/dir');
+    expect(FileUtils.listFiles).toHaveBeenCalledWith('/plugin/dir');
+    await (deps.deleteFile as (p: string) => Promise<unknown>)('/plugin/x.png');
+    expect(FileUtils.deleteFile).toHaveBeenCalledWith('/plugin/x.png');
+  });
+
+  it('bootstrap survives a scratch-sweep failure', async () => {
+    mockSweepScratchOrphans.mockRejectedValueOnce(new Error('sweep boom'));
+    const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      importBootstrap();
+      await drainMicrotasks();
+      expect(mockInit).toHaveBeenCalledTimes(1);
+      expect(
+        log.mock.calls.some(c => c.join(' ').includes('scratch sweep failed')),
+      ).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it('passes a deleteFile bridge into the sidebar capture deps', async () => {
@@ -182,7 +208,13 @@ describe('index.js bootstrap', () => {
     const deps = mockCaptureCurrentPage.mock.calls[0][0] as {
       deleteFile?: unknown;
     };
-    expect(typeof deps.deleteFile).toBe('function');
+    const {FileUtils} = jest.requireMock('sn-plugin-lib') as {
+      FileUtils: {deleteFile: jest.Mock};
+    };
+    await (deps.deleteFile as (p: string) => Promise<unknown>)(
+      '/plugin/scratch.png',
+    );
+    expect(FileUtils.deleteFile).toHaveBeenCalledWith('/plugin/scratch.png');
   });
 
   it('registers App + SnCopilotPanel components and inits the plugin manager', () => {
